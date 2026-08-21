@@ -1,0 +1,19 @@
+{
+  "name": "gomoku-webxdc",
+  "version": "0.0.2",
+  "description": "Gomoku game packaged for WebXDC",
+  "main": "index.html",
+  "scripts": {
+    "build": "bestzip dist/gomoku.xdc manifest.toml index.html gomoku.png"
+  },
+  "keywords": [
+    "webxdc",
+    "gomoku",
+    "game"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "bestzip": "^2.2.1"
+  }
+}

@@ -1,0 +1,4 @@
+name = "Gomoku"
+subtitle = "Classic Five-in-a-Row strategy game"
+description = "Play Gomoku against your friends! Keep track of scores, alternate turns, and enjoy the firework celebration when you win."
+icon = "gomoku.png"

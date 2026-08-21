@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Let's Gomoku! - WebXDC</title>
+    <!-- WebXDC API script (injected by the messenger client) -->
+    <script src="webxdc.js"></script>
+    <style>
+        :root {
+            --board-color: #DEB887; 
+            --line-color: #000;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #2c3e50;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+            overflow-x: hidden;
+        }
+
+        h1 { margin-top: 0; margin-bottom: 10px; font-size: 28px; }
+
+        .dashboard {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            max-width: 600px;
+            background-color: #34495e;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .player-info { display: flex; flex-direction: column; align-items: center; width: 45%; }
+        
+        .player-info input {
+            padding: 5px; text-align: center; border: none; border-radius: 4px;
+            margin-bottom: 5px; font-weight: bold; width: 100%; box-sizing: border-box;
+            background: #fff; color: #333;
+        }
+        .player-info input:disabled { background: #ecf0f1; color: #7f8c8d; }
+
+        .score { font-size: 24px; font-weight: bold; color: #f1c40f; }
+        .turn-indicator { font-size: 16px; margin-bottom: 15px; font-weight: bold; color: #ecf0f1; text-align: center; }
+
+        #board {
+            display: grid;
+            grid-template-columns: repeat(15, 30px);
+            grid-template-rows: repeat(15, 30px);
+            background-color: var(--board-color);
+            padding: 15px;
+            border-radius: 4px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.5);
+            border: 2px solid #5c4033;
+            position: relative;
+        }
+
+        /* Cleaned up board lines for better rendering across devices */
+        .cell {
+            width: 30px; height: 30px; position: relative; cursor: pointer;
+            background: 
+                linear-gradient(to right, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px),
+                linear-gradient(to bottom, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px);
+        }
+        .cell[data-row="0"] { background: linear-gradient(to right, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px), linear-gradient(to bottom, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px); }
+        .cell[data-row="14"] { background: linear-gradient(to right, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px), linear-gradient(to bottom, transparent 0%, var(--line-color) 0%, var(--line-color) 2%, transparent 16px); }
+        .cell[data-col="0"] { background: linear-gradient(to right, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px), linear-gradient(to bottom, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px); }
+        .cell[data-col="14"] { background: linear-gradient(to right, transparent 0%, var(--line-color) 0%, var(--line-color) 2%, transparent 16px), linear-gradient(to bottom, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px); }
+        .cell[data-row="0"][data-col="0"] { background: linear-gradient(to right, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px), linear-gradient(to bottom, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px); }
+        .cell[data-row="0"][data-col="14"] { background: linear-gradient(to right, transparent 0%, var(--line-color) 0%, var(--line-color) 2%, transparent 16px), linear-gradient(to bottom, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px); }
+        .cell[data-row="14"][data-col="0"] { background: linear-gradient(to right, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px), linear-gradient(to bottom, transparent 0%, var(--line-color) 0%, var(--line-color) 2%, transparent 16px); }
+        .cell[data-row="14"][data-col="14"] { background: linear-gradient(to right, transparent 0%, var(--line-color) 0%, var(--line-color) 2%, transparent 16px), linear-gradient(to bottom, transparent 0%, var(--line-color) 0%, var(--line-color) 2%, transparent 16px); }
+
+        .piece {
+            width: 24px; height: 24px; border-radius: 50%; position: absolute;
+            top: 50%; left: 50%; transform: translate(-50%, -50%);
+            box-shadow: 2px 2px 4px rgba(0,0,0,0.4);
+        }
+        .piece.black { background: radial-gradient(circle at 30% 30%, #666, #000); }
+        .piece.white { background: radial-gradient(circle at 30% 30%, #fff, #ccc); }
+
+        .controls { margin-top: 20px; display: flex; gap: 15px; flex-wrap: wrap; justify-content: center; }
+        select, button { padding: 10px 15px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; }
+        select { background-color: #ecf0f1; color: #2c3e50; font-weight: bold; }
+        button { background-color: #27ae60; color: white; transition: background 0.3s; }
+        button:hover { background-color: #2ecc71; }
+        button:disabled { background-color: #7f8c8d; cursor: not-allowed; }
+
+        #fireworksCanvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 100; }
+    </style>
+</head>
+<body>
+
+    <h1 id="title">Let's Gomoku!</h1>
+
+    <div class="dashboard">
+        <div class="player-info">
+            <input type="text" id="p1-name" value="Waiting for P1 (Black)">
+            <div class="score" id="p1-score">0</div>
+        </div>
+        <div class="player-info">
+            <input type="text" id="p2-name" value="Waiting for P2 (White)">
+            <div class="score" id="p2-score">0</div>
+        </div>
+    </div>
+
+    <div class="turn-indicator" id="turn-indicator">Current Turn: Waiting for P1 (Black)</div>
+    <div class="connection-indicator" id="connection-indicator" style="display: none;"></div>
+
+    <div id="board"></div>
+
+    <div class="controls">
+        <select id="game-mode">
+            <option value="webxdc">WebXDC Network PvP</option>
+            <option value="pvp">Local Pass & Play</option>
+            <option value="pve">Local vs Computer</option>
+        </select>
+        <button id="reset-btn">Reset Board / Sync</button>
+    </div>
+
+    <canvas id="fireworksCanvas"></canvas>
+
+    <script>
+        const boardSize = 15;
+        let board = [];
+        let currentPlayer = 1; 
+        let gameOver = false;
+        let scores = { 1: 0, 2: 0 };
+        let isComputerThinking = false;
+        
+        let networkPlayers = { 1: null, 2: null };
+        let connectedPlayers = {};
+        let myAddr = window.webxdc ? window.webxdc.selfAddr : 'local_user';
+        let myName = window.webxdc ? window.webxdc.selfName : 'Player';
+
+        const boardElement = document.getElementById('board');
+        const turnIndicator = document.getElementById('turn-indicator');
+        const connectionIndicator = document.getElementById('connection-indicator');
+        const p1NameInput = document.getElementById('p1-name');
+        const p2NameInput = document.getElementById('p2-name');
+        const p1ScoreEl = document.getElementById('p1-score');
+        const p2ScoreEl = document.getElementById('p2-score');
+        const gameModeSelect = document.getElementById('game-mode');
+        const resetBtn = document.getElementById('reset-btn');
+
+        function rememberConnectedPlayer(addr, name) {
+            if (!addr) return;
+            connectedPlayers[addr] = {
+                name: name || 'Player',
+                lastSeen: Date.now()
+            };
+            updateConnectionIndicator();
+        }
+
+        function updateConnectionIndicator() {
+            const count = Object.keys(connectedPlayers).length;
+
+            if (gameModeSelect.value === 'webxdc') {
+                connectionIndicator.style.display = 'block';
+                connectionIndicator.innerHTML = `WebXDC Players Connected: <strong>${count}</strong>`;
+            } else {
+                connectionIndicator.style.display = 'none';
+            }
+        }
+
+        function announcePresence() {
+            if (!window.webxdc || gameModeSelect.value !== 'webxdc') return;
+
+            rememberConnectedPlayer(myAddr, myName);
+
+            window.webxdc.sendUpdate({
+                payload: {
+                    action: 'JOIN',
+                    addr: myAddr,
+                    name: myName
+                },
+                info: `${myName} joined the Gomoku game.`
+            }, `${myName} joined the Gomoku game.`);
+        }
+
+        // WebXDC Listener: Receives moves from chat
+        if (window.webxdc) {
+            window.webxdc.setUpdateListener(function(update) {
+                const payload = update.payload;
+                
+                if (gameModeSelect.value !== 'webxdc') return Promise.resolve();
+
+                if (payload.addr) {
+                    rememberConnectedPlayer(payload.addr, payload.name);
+                }
+
+                if (payload.action === 'JOIN') {
+                    rememberConnectedPlayer(payload.addr, payload.name);
+                } else if (payload.action === 'MOVE') {
+                    // Claim player slot if not claimed yet
+                    if (!networkPlayers[payload.player]) {
+                        networkPlayers[payload.player] = payload.addr;
+                        if (payload.player === 1) p1NameInput.value = payload.name + " (Black)";
+                        if (payload.player === 2) p2NameInput.value = payload.name + " (White)";
+                    }
+                    
+                    // Optimistic UI check: If our board already has this piece, skip it.
+                    if (board[payload.r][payload.c] === payload.player) {
+                        return Promise.resolve();
+                    }
+
+                    // Otherwise apply the move locally
+                    currentPlayer = payload.player;
+                    applyPieceLocally(payload.r, payload.c);
+                } else if (payload.action === 'RESET') {
+                    initBoard(false); 
+                }
+
+                // Resolving promise required by newer WebXDC APIs
+                return Promise.resolve();
+            }, 0);
+        }
+
+        gameModeSelect.addEventListener('change', (e) => {
+            if (e.target.value === 'pve') {
+                p2NameInput.value = "Computer (White)";
+                p1NameInput.value = "Player 1 (Black)";
+                p2NameInput.disabled = true; p1NameInput.disabled = false;
+            } else if (e.target.value === 'webxdc') {
+                p1NameInput.disabled = true; p2NameInput.disabled = true;
+                p1NameInput.value = networkPlayers[1] ? p1NameInput.value : "Waiting for P1 (Black)";
+                p2NameInput.value = networkPlayers[2] ? p2NameInput.value : "Waiting for P2 (White)";
+                announcePresence();
+            } else {
+                p1NameInput.value = "Player 1 (Black)";
+                p2NameInput.value = "Player 2 (White)";
+                p1NameInput.disabled = false; p2NameInput.disabled = false;
+            }
+            updateConnectionIndicator();
+            initBoard(true);
+        });
+
+        function initBoard(sendNetworkUpdate = false) {
+            boardElement.innerHTML = '';
+            board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
+            gameOver = false;
+            currentPlayer = 1;
+            isComputerThinking = false;
+            stopFireworks();
+
+            if (gameModeSelect.value === 'webxdc') {
+                networkPlayers = { 1: null, 2: null };
+                rememberConnectedPlayer(myAddr, myName);
+                if(p1NameInput.value.includes("Waiting")) p1NameInput.value = "Waiting for P1 (Black)";
+                if(p2NameInput.value.includes("Waiting")) p2NameInput.value = "Waiting for P2 (White)";
+            }
+
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    const cell = document.createElement('div');
+                    cell.classList.add('cell');
+                    cell.dataset.row = r;
+                    cell.dataset.col = c;
+                    cell.addEventListener('click', handleCellClick);
+                    boardElement.appendChild(cell);
+                }
+            }
+            updateTurnIndicator();
+            updateConnectionIndicator();
+
+            if (sendNetworkUpdate && window.webxdc && gameModeSelect.value === 'webxdc') {
+                window.webxdc.sendUpdate({
+                    payload: { action: 'RESET', addr: myAddr, name: myName },
+                    info: `${myName} reset the game board.`
+                }, `${myName} reset the game board.`);
+            }
+        }
+
+        function handleCellClick(e) {
+            if (gameOver || isComputerThinking) return;
+            
+            // Robust click targeting logic
+            const cell = e.target.closest('.cell');
+            if (!cell) return;
+
+            const r = parseInt(cell.dataset.row);
+            const c = parseInt(cell.dataset.col);
+
+            if (isNaN(r) || isNaN(c) || board[r][c] !== 0) return; 
+
+            if (gameModeSelect.value === 'webxdc') {
+                const activeAddr = networkPlayers[currentPlayer];
+                if (activeAddr && activeAddr !== myAddr) {
+                    alert("It is not your turn!");
+                    return;
+                }
+                
+                // Track who made the move before it flips in applyPieceLocally
+                let playedAs = currentPlayer;
+
+                // Optimistic UI: Claim slot locally immediately to prevent double clicking
+                if (!networkPlayers[playedAs]) {
+                    networkPlayers[playedAs] = myAddr;
+                    if (playedAs === 1) p1NameInput.value = myName + " (Black)";
+                    if (playedAs === 2) p2NameInput.value = myName + " (White)";
+                }
+
+                // Optimistic UI: Apply it immediately to the local board
+                applyPieceLocally(r, c);
+
+                // Broadcast it silently to the chat network
+                if (window.webxdc) {
+                    window.webxdc.sendUpdate({
+                        payload: { action: 'MOVE', r: r, c: c, player: playedAs, addr: myAddr, name: myName },
+                        info: `${myName} placed a piece.`
+                    }, `Gomoku: ${myName} made a move!`);
+                }
+                return; 
+            }
+
+            // Local Modes
+            applyPieceLocally(r, c);
+        }
+
+        function applyPieceLocally(r, c) {
+            board[r][c] = currentPlayer;
+            const piece = document.createElement('div');
+            piece.classList.add('piece', currentPlayer === 1 ? 'black' : 'white');
+            
+            const cell = document.querySelector(`.cell[data-row="${r}"][data-col="${c}"]`);
+            cell.appendChild(piece);
+
+            if (checkWin(r, c, currentPlayer)) {
+                gameOver = true;
+                handleWin(currentPlayer);
+            } else {
+                currentPlayer = currentPlayer === 1 ? 2 : 1;
+                updateTurnIndicator();
+
+                if (gameModeSelect.value === 'pve' && currentPlayer === 2 && !gameOver) {
+                    isComputerThinking = true;
+                    setTimeout(makeComputerMove, 400); 
+                }
+            }
+        }
+
+        // --- AI Logic ---
+        function makeComputerMove() {
+            let bestScore = -1; let bestMoves = [];
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (board[r][c] === 0) {
+                        let scoreAI = evaluatePosition(r, c, 2); 
+                        let scoreHuman = evaluatePosition(r, c, 1);
+                        let totalScore = scoreAI + (scoreHuman * 0.95); 
+                        if (totalScore > bestScore) { bestScore = totalScore; bestMoves = [{r, c}]; } 
+                        else if (totalScore === bestScore) { bestMoves.push({r, c}); }
+                    }
+                }
+            }
+            let chosenMove = bestMoves[Math.floor(Math.random() * bestMoves.length)];
+            if (bestScore === 0) chosenMove = {r: Math.floor(boardSize/2), c: Math.floor(boardSize/2)};
+            isComputerThinking = false;
+            applyPieceLocally(chosenMove.r, chosenMove.c);
+        }
+
+        function evaluatePosition(r, c, player) {
+            let score = 0;
+            const directions = [ [[0,1], [0,-1]], [[1,0], [-1,0]], [[1,1], [-1,-1]], [[1,-1], [-1,1]] ];
+            for (let dir of directions) {
+                let count = 1; let openEnds = 0;
+                for (let d of dir) {
+                    let nr = r + d[0], nc = c + d[1];
+                    while (nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize && board[nr][nc] === player) {
+                        count++; nr += d[0]; nc += d[1];
+                    }
+                    if (nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize && board[nr][nc] === 0) openEnds++;
+                }
+                if (count >= 5) score += 100000;
+                else if (count === 4 && openEnds === 2) score += 10000;
+                else if (count === 4 && openEnds === 1) score += 1000;
+                else if (count === 3 && openEnds === 2) score += 1000;
+                else if (count === 3 && openEnds === 1) score += 100;
+                else if (count === 2 && openEnds === 2) score += 100;
+                else if (count === 2 && openEnds === 1) score += 10;
+                else score += 1;
+            }
+            return score;
+        }
+
+        // --- Win Logic ---
+        function checkWin(r, c, player) {
+            const directions = [ [[0, 1], [0, -1]], [[1, 0], [-1, 0]], [[1, 1], [-1, -1]], [[1, -1], [-1, 1]] ];
+            for (let dir of directions) {
+                let count = 1;
+                for (let d of dir) {
+                    let nr = r + d[0], nc = c + d[1];
+                    while (nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize && board[nr][nc] === player) {
+                        count++; nr += d[0]; nc += d[1];
+                    }
+                }
+                if (count >= 5) return true;
+            }
+            return false;
+        }
+
+        function handleWin(player) {
+            const winnerName = player === 1 ? p1NameInput.value.split(" ")[0] : p2NameInput.value.split(" ")[0];
+            turnIndicator.innerHTML = `🎉 <strong>${winnerName} Wins!</strong> 🎉`;
+            turnIndicator.style.color = '#f1c40f';
+            scores[player]++;
+            p1ScoreEl.innerText = scores[1];
+            p2ScoreEl.innerText = scores[2];
+            startFireworks();
+
+            if (gameModeSelect.value === 'webxdc' && window.webxdc && networkPlayers[player] === myAddr) {
+                 window.webxdc.sendUpdate({
+                    payload: { action: 'WIN' },
+                    info: `${myName} won the game!`
+                }, `Gomoku: ${myName} won the game!`);
+            }
+        }
+
+        function updateTurnIndicator() {
+            let name = currentPlayer === 1 ? p1NameInput.value : p2NameInput.value;
+            const color = currentPlayer === 1 ? '(Black)' : '(White)';
+            
+            if (gameModeSelect.value === 'webxdc' && networkPlayers[currentPlayer] === myAddr) {
+                turnIndicator.innerHTML = `Current Turn: <strong>You</strong> ${color}`;
+            } else {
+                turnIndicator.innerHTML = `Current Turn: ${name.replace(/\(.*\)/, '')} ${color}`;
+            }
+            turnIndicator.style.color = '#ecf0f1';
+        }
+
+        p1NameInput.addEventListener('input', updateTurnIndicator);
+        p2NameInput.addEventListener('input', updateTurnIndicator);
+        resetBtn.addEventListener('click', () => initBoard(true));
+
+        // --- Fireworks Animation ---
+        const canvas = document.getElementById('fireworksCanvas');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+        let fireworkAnimationId = null;
+
+        function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x; this.y = y; this.color = color;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 5 + 2;
+                this.vx = Math.cos(angle) * speed; this.vy = Math.sin(angle) * speed;
+                this.alpha = 1; this.decay = Math.random() * 0.015 + 0.015;
+            }
+            update() {
+                this.vx *= 0.98; this.vy *= 0.98; this.vy += 0.05;
+                this.x += this.vx; this.y += this.vy; this.alpha -= this.decay;
+            }
+            draw() {
+                ctx.save(); ctx.globalAlpha = this.alpha; ctx.beginPath();
+                ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+                ctx.fillStyle = this.color; ctx.fill(); ctx.restore();
+            }
+        }
+
+        function createExplosion(x, y) {
+            const colors = ['#ff0044', '#00ff44', '#4400ff', '#ffdd00', '#00ddff'];
+            const color = colors[Math.floor(Math.random() * colors.length)];
+            for (let i = 0; i < 50; i++) particles.push(new Particle(x, y, color));
+        }
+
+        function animateFireworks() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (Math.random() < 0.05) createExplosion(Math.random() * canvas.width, Math.random() * (canvas.height / 2));
+            particles = particles.filter(p => p.alpha > 0);
+            particles.forEach(p => { p.update(); p.draw(); });
+            fireworkAnimationId = requestAnimationFrame(animateFireworks);
+        }
+
+        function startFireworks() { if (!fireworkAnimationId) animateFireworks(); }
+        function stopFireworks() {
+            if (fireworkAnimationId) { cancelAnimationFrame(fireworkAnimationId); fireworkAnimationId = null; }
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            particles = [];
+        }
+
+        // Boot
+        if (gameModeSelect.value === 'webxdc') {
+            p1NameInput.value = "Waiting for P1 (Black)";
+            p2NameInput.value = "Waiting for P2 (White)";
+            p1NameInput.disabled = true; p2NameInput.disabled = true;
+            announcePresence();
+        }
+        initBoard(false);
+    </script>
+</body>
+</html>

@@ -50,7 +50,14 @@
         }
         .player-info input:disabled { background: #ecf0f1; color: #7f8c8d; }
 
-        .turn-indicator { font-size: 16px; margin-bottom: 15px; font-weight: bold; color: #ecf0f1; text-align: center; }
+        .turn-indicator { font-size: 16px; margin-bottom: 6px; font-weight: bold; color: #ecf0f1; text-align: center; }
+        .move-timer {
+            font-size: 14px;
+            margin-bottom: 15px;
+            color: #c8d6e5;
+            text-align: center;
+            font-weight: 600;
+        }
         .all-players-scoreboard {
             width: 100%;
             max-width: 600px;
@@ -270,6 +277,7 @@
     </div>
 
     <div class="turn-indicator" id="turn-indicator">Current Turn: Waiting for P1 (Black)</div>
+    <div class="move-timer" id="move-timer">Move Timer: --</div>
 
     <div id="board"></div>
 
@@ -339,6 +347,7 @@
         const boardElement = document.getElementById('board');
         const allPlayersScoreboard = document.getElementById('all-players-scoreboard');
         const turnIndicator = document.getElementById('turn-indicator');
+        const moveTimerEl = document.getElementById('move-timer');
         const p1NameInput = document.getElementById('p1-name');
         const p2NameInput = document.getElementById('p2-name');
         const gameModeSelect = document.getElementById('game-mode');
@@ -376,6 +385,10 @@
         let gameStartAnnounced = false;
         const playerStaleMs = 45000;
         const knownLeftPeers = new Set();
+        const moveTimeLimitMs = 30000;
+        let turnDeadlineTs = null;
+        let moveTimerInterval = null;
+        let timeoutResolutionInFlight = false;
 
         function getChatInstanceInfo() {
             if (!window.webxdc) {
@@ -573,6 +586,147 @@
             debugLog('GAME_START_ANNOUNCED', { source, p1Owner, p2Owner });
         }
 
+        function getPlayerDisplayName(playerNumber, peerId = null) {
+            if (peerId) return displayNameForPeer(peerId);
+            if (playerNumber === 1) return cleanPlayerName(p1NameInput.value);
+            if (playerNumber === 2) return cleanPlayerName(p2NameInput.value);
+            return 'Player';
+        }
+
+        function shouldRunMoveTimer() {
+            if (gameOver || !Array.isArray(board) || board.length !== boardSize) return false;
+            if (gameModeSelect.value !== 'webxdc') return true;
+            return !!networkPlayers[currentPlayer];
+        }
+
+        function stopMoveTimerInterval() {
+            if (moveTimerInterval) {
+                clearInterval(moveTimerInterval);
+                moveTimerInterval = null;
+            }
+        }
+
+        function updateMoveTimerDisplay() {
+            if (!moveTimerEl) return;
+            if (gameOver) {
+                moveTimerEl.textContent = 'Move Timer: --';
+                moveTimerEl.style.color = '#c8d6e5';
+                return;
+            }
+            if (!shouldRunMoveTimer()) {
+                moveTimerEl.textContent = gameModeSelect.value === 'webxdc'
+                    ? 'Move Timer: waiting for active player'
+                    : 'Move Timer: --';
+                moveTimerEl.style.color = '#c8d6e5';
+                return;
+            }
+            if (!Number.isFinite(turnDeadlineTs)) {
+                moveTimerEl.textContent = 'Move Timer: 30s';
+                moveTimerEl.style.color = '#c8d6e5';
+                return;
+            }
+            const remainingMs = Math.max(0, turnDeadlineTs - Date.now());
+            const remainingSec = Math.ceil(remainingMs / 1000);
+            moveTimerEl.textContent = `Move Timer: ${remainingSec}s`;
+            moveTimerEl.style.color = remainingSec <= 5 ? '#ff7675' : remainingSec <= 10 ? '#f6c90e' : '#c8d6e5';
+        }
+
+        function applyMoveTimeoutResult({ loserPlayer, winnerPlayer, loserPeerId = null, winnerPeerId = null, source = 'unknown' }) {
+            if (gameOver) return;
+            gameOver = true;
+            currentPlayer = winnerPlayer === 2 ? 2 : 1;
+            turnDeadlineTs = null;
+            stopMoveTimerInterval();
+
+            const winnerName = getPlayerDisplayName(winnerPlayer, winnerPeerId);
+            const loserName = getPlayerDisplayName(loserPlayer, loserPeerId);
+            scores[currentPlayer]++;
+            if (winnerPeerId) {
+                ensurePlayerScoreEntry(winnerPeerId);
+                playerScoresByPeer[winnerPeerId]++;
+            }
+            updateAllPlayersScoreboard();
+
+            turnIndicator.innerHTML = `⏰ <strong>${loserName}</strong> ran out of time. <strong>${winnerName}</strong> wins!`;
+            turnIndicator.style.color = '#f1c40f';
+            updateMoveTimerDisplay();
+            startFireworks();
+
+            addNotification(
+                `Game ended: ${loserName} ran out of time. ${winnerName} won.`,
+                {
+                    id: `timeout:${loserPeerId || loserPlayer}:${winnerPeerId || winnerPlayer}:${countMoves(board)}`,
+                    at: Date.now(),
+                    broadcast: source === 'local-timeout' && gameModeSelect.value === 'webxdc'
+                }
+            );
+            debugLog('MOVE_TIMEOUT_APPLIED', { loserPlayer, winnerPlayer, loserPeerId, winnerPeerId, source });
+        }
+
+        function resolveMoveTimeout(source = 'local-timeout') {
+            if (gameOver || timeoutResolutionInFlight) return;
+            if (!shouldRunMoveTimer()) return;
+            timeoutResolutionInFlight = true;
+            try {
+                const loserPlayer = currentPlayer;
+                const winnerPlayer = loserPlayer === 1 ? 2 : 1;
+                if (gameModeSelect.value === 'webxdc') {
+                    const loserPeerId = networkPlayers[loserPlayer];
+                    const winnerPeerId = networkPlayers[winnerPlayer];
+                    if (!loserPeerId || !winnerPeerId) return;
+                    applyMoveTimeoutResult({ loserPlayer, winnerPlayer, loserPeerId, winnerPeerId, source });
+                    if (source === 'local-timeout' && window.webxdc) {
+                        sendXdcUpdate({
+                            action: 'TIMEOUT',
+                            loserPlayer,
+                            winnerPlayer,
+                            loserPeerId,
+                            winnerPeerId,
+                            addr: myAddr,
+                            name: myName,
+                            peerId: myPeerId
+                        }, `${getPlayerDisplayName(loserPlayer, loserPeerId)} ran out of time.`, 'Move timeout');
+                        broadcastStateSync('move-timeout');
+                    }
+                    return;
+                }
+                applyMoveTimeoutResult({ loserPlayer, winnerPlayer, source });
+            } finally {
+                timeoutResolutionInFlight = false;
+            }
+        }
+
+        function tickMoveTimer() {
+            if (gameOver || !shouldRunMoveTimer()) {
+                turnDeadlineTs = null;
+                stopMoveTimerInterval();
+                updateMoveTimerDisplay();
+                return;
+            }
+            if (Number.isFinite(turnDeadlineTs) && turnDeadlineTs <= Date.now()) {
+                resolveMoveTimeout('local-timeout');
+                return;
+            }
+            updateMoveTimerDisplay();
+        }
+
+        function startMoveTimerForCurrentTurn(options = {}) {
+            const shouldReset = !!options.resetDeadline;
+            if (!shouldRunMoveTimer()) {
+                turnDeadlineTs = null;
+                stopMoveTimerInterval();
+                updateMoveTimerDisplay();
+                return;
+            }
+            if (shouldReset || !Number.isFinite(turnDeadlineTs)) {
+                turnDeadlineTs = Date.now() + moveTimeLimitMs;
+            }
+            if (!moveTimerInterval) {
+                moveTimerInterval = setInterval(tickMoveTimer, 250);
+            }
+            updateMoveTimerDisplay();
+        }
+
         function applyPeerLeft(peerId, source = 'unknown', leaveEventId = null, noteText = null) {
             if (!peerId || peerId === myPeerId) return;
             if (knownLeftPeers.has(peerId)) return;
@@ -593,6 +747,15 @@
 
         function applyWithdrawalResult(quitterPeerId, winnerPeerId, source = 'unknown') {
             if (!winnerPeerId || gameOver) return;
+            if (quitterPeerId) {
+                const quitterName = displayNameForPeer(quitterPeerId);
+                applyPeerLeft(
+                    quitterPeerId,
+                    `${source}-withdrawal`,
+                    `leave-from-withdrawal:${quitterPeerId}:${winnerPeerId}:${countMoves(board)}`,
+                    `${quitterName} left the game.`
+                );
+            }
             const winnerPlayer = networkPlayers[1] === winnerPeerId ? 1
                 : networkPlayers[2] === winnerPeerId ? 2
                 : null;
@@ -600,6 +763,8 @@
 
             gameOver = true;
             currentPlayer = winnerPlayer;
+            turnDeadlineTs = null;
+            stopMoveTimerInterval();
             const winnerName = displayNameForPeer(winnerPeerId);
             const quitterName = displayNameForPeer(quitterPeerId);
             scores[winnerPlayer]++;
@@ -608,6 +773,7 @@
             updateAllPlayersScoreboard();
             turnIndicator.innerHTML = `🏳️ <strong>${winnerName}</strong> wins by withdrawal`;
             turnIndicator.style.color = '#f1c40f';
+            updateMoveTimerDisplay();
             startFireworks();
 
             const noteId = `withdrawal:${quitterPeerId || 'unknown'}:${winnerPeerId}:${countMoves(board)}`;
@@ -806,6 +972,13 @@
             if (senderPeerId) {
                 rememberConnectedPlayer(senderPeerId, senderName, senderAddr);
             }
+            if (isNewPeer) {
+                addNotification(`${cleanPlayerName(senderName)} joined the game.`, {
+                    id: `join-detected:${senderPeerId}:${payload.msgId || Date.now()}`,
+                    at: Date.now(),
+                    broadcast: false
+                });
+            }
 
             if (isLive && isNewPeer && payload.action !== 'PRESENCE') {
                 debugLog('PRESENCE_REPLY_TRIGGERED', {
@@ -853,6 +1026,14 @@
                 applyPieceLocally(payload.r, payload.c);
             } else if (payload.action === 'WITHDRAWAL') {
                 applyWithdrawalResult(payload.quitterPeerId, payload.winnerPeerId, 'remote-update');
+            } else if (payload.action === 'TIMEOUT') {
+                applyMoveTimeoutResult({
+                    loserPlayer: payload.loserPlayer === 2 ? 2 : 1,
+                    winnerPlayer: payload.winnerPlayer === 2 ? 2 : 1,
+                    loserPeerId: typeof payload.loserPeerId === 'string' ? payload.loserPeerId : null,
+                    winnerPeerId: typeof payload.winnerPeerId === 'string' ? payload.winnerPeerId : null,
+                    source: 'remote-update'
+                });
             } else if (payload.action === 'RESET') {
                 initBoard(false);
             }
@@ -1150,7 +1331,8 @@
                     notifications: notifications.map((entry) => ({ id: entry.id, at: entry.at, text: entry.text })),
                     gameStartAnnounced,
                     gameOver,
-                    moveCount: countMoves(board)
+                    moveCount: countMoves(board),
+                    turnDeadlineTs
                 }
             };
         }
@@ -1182,6 +1364,7 @@
             board = normalizedBoard;
             currentPlayer = state.currentPlayer === 2 ? 2 : 1;
             gameOver = !!state.gameOver;
+            turnDeadlineTs = Number.isFinite(state.turnDeadlineTs) ? state.turnDeadlineTs : null;
             networkPlayers = {
                 1: typeof state.networkPlayers?.[1] === 'string' ? state.networkPlayers[1] : null,
                 2: typeof state.networkPlayers?.[2] === 'string' ? state.networkPlayers[2] : null
@@ -1219,6 +1402,7 @@
 
             renderBoardFromState();
             updateTurnIndicator();
+            startMoveTimerForCurrentTurn({ resetDeadline: !Number.isFinite(turnDeadlineTs) });
             updateConnectionIndicator();
             updateAllPlayersScoreboard();
             debugLog('STATE_APPLIED', {
@@ -1302,6 +1486,7 @@
                 );
                 broadcastStateSync('reset');
             }
+            startMoveTimerForCurrentTurn({ resetDeadline: true });
         }
 
         function handleCellClick(e) {
@@ -1396,10 +1581,13 @@
 
             if (checkWin(r, c, currentPlayer)) {
                 gameOver = true;
+                turnDeadlineTs = null;
+                stopMoveTimerInterval();
                 handleWin(currentPlayer);
             } else {
                 currentPlayer = currentPlayer === 1 ? 2 : 1;
                 updateTurnIndicator();
+                startMoveTimerForCurrentTurn({ resetDeadline: true });
 
                 if (gameModeSelect.value === 'pve' && currentPlayer === 2 && !gameOver) {
                     isComputerThinking = true;
@@ -1472,6 +1660,9 @@
             const winnerName = player === 1 ? p1NameInput.value.split(" ")[0] : p2NameInput.value.split(" ")[0];
             turnIndicator.innerHTML = `🎉 <strong>${winnerName} Wins!</strong> 🎉`;
             turnIndicator.style.color = '#f1c40f';
+            turnDeadlineTs = null;
+            stopMoveTimerInterval();
+            updateMoveTimerDisplay();
             scores[player]++;
             const winnerPeerId = networkPlayers[player];
             if (winnerPeerId) {
@@ -1515,6 +1706,7 @@
                 turnIndicator.innerHTML = `Current Turn: ${name.replace(/\(.*\)/, '')} ${color}`;
             }
             turnIndicator.style.color = '#ecf0f1';
+            startMoveTimerForCurrentTurn({ resetDeadline: false });
         }
 
         p1NameInput.addEventListener('input', updateTurnIndicator);

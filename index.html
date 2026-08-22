@@ -283,7 +283,8 @@
 
     <div class="controls">
         <select id="game-mode">
-            <option value="webxdc">WebXDC Network PvP</option>
+            <option value="webxdc">Network (2 players)</option>
+            <option value="webxdc-tournament">Network (Tournament)</option>
             <option value="pvp">Local Pass & Play</option>
             <option value="pve">Local vs Computer</option>
         </select>
@@ -389,6 +390,17 @@
         let turnDeadlineTs = null;
         let moveTimerInterval = null;
         let timeoutResolutionInFlight = false;
+        const tournamentState = {
+            enabled: false,
+            pairIndex: 0,
+            pairings: [],
+            schedule: [],
+            lastMatchKey: null,
+            finished: false,
+            winCounts: {},
+            countdownDeadlineTs: null,
+            countdownTimer: null
+        };
 
         function getChatInstanceInfo() {
             if (!window.webxdc) {
@@ -481,6 +493,10 @@
             notificationsLogEl.scrollTop = notificationsLogEl.scrollHeight;
         }
 
+        function isWebxdcNetworkMode() {
+            return gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament';
+        }
+
         function addNotification(text, options = {}) {
             if (typeof text !== 'string' || !text.trim()) return;
             const noteText = text.trim();
@@ -496,7 +512,7 @@
             }
             renderNotifications();
 
-            if (options.broadcast && window.webxdc && gameModeSelect.value === 'webxdc') {
+            if (options.broadcast && window.webxdc && isWebxdcNetworkMode()) {
                 sendXdcUpdate({
                     action: 'NOTIFY',
                     noteId,
@@ -565,7 +581,7 @@
         function startPresenceSync() {
             if (presenceSyncTimer || !window.webxdc) return;
             presenceSyncTimer = setInterval(() => {
-                if (gameModeSelect.value !== 'webxdc') return;
+                if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
                 announcePresence('PRESENCE');
             }, 15000);
             debugLog('PRESENCE_SYNC_STARTED', { intervalMs: 15000 });
@@ -586,6 +602,169 @@
             debugLog('GAME_START_ANNOUNCED', { source, p1Owner, p2Owner });
         }
 
+        function buildTournamentSchedule() {
+            const peers = [...new Set([myPeerId, ...Object.keys(connectedPlayers)])].filter(Boolean);
+            if (peers.length < 2) return [];
+            const ordered = peers.slice().sort((a, b) => {
+                const aName = displayNameForPeer(a);
+                const bName = displayNameForPeer(b);
+                return aName.localeCompare(bName) || a.localeCompare(b);
+            });
+            const schedule = [];
+            const seen = new Set();
+            for (let i = 0; i < ordered.length; i++) {
+                for (let j = i + 1; j < ordered.length; j++) {
+                    const pair = [ordered[i], ordered[j]].slice().sort((a, b) => a.localeCompare(b));
+                    const key = pair.join('|');
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    schedule.push(pair);
+                }
+            }
+            return schedule;
+        }
+
+        function getTournamentPairings() {
+            if (!tournamentState.schedule.length) {
+                tournamentState.schedule = buildTournamentSchedule();
+            }
+            return tournamentState.schedule;
+        }
+
+        function syncMyAssignedPlayer() {
+            myAssignedPlayer = networkPlayers[1] === myPeerId ? 1 : networkPlayers[2] === myPeerId ? 2 : null;
+        }
+
+        function getLocalAssignedPlayerNumber() {
+            if (networkPlayers[1] === myPeerId) return 1;
+            if (networkPlayers[2] === myPeerId) return 2;
+            if (myAssignedPlayer === 1 || myAssignedPlayer === 2) return myAssignedPlayer;
+            return null;
+        }
+
+        function updateTournamentMatchState(forcePairIndex = null) {
+            if (gameModeSelect.value !== 'webxdc-tournament') {
+                tournamentState.enabled = false;
+                return;
+            }
+            tournamentState.enabled = true;
+            tournamentState.pairings = getTournamentPairings();
+            if (!tournamentState.pairings.length) {
+                networkPlayers = { 1: null, 2: null };
+                myAssignedPlayer = null;
+                return;
+            }
+            const safeIndex = Number.isInteger(forcePairIndex)
+                ? forcePairIndex
+                : ((tournamentState.pairIndex || 0) % tournamentState.pairings.length);
+            tournamentState.pairIndex = (safeIndex + tournamentState.pairings.length) % tournamentState.pairings.length;
+            const pair = tournamentState.pairings[tournamentState.pairIndex];
+            const existingSeatAssignment = !!networkPlayers[1] && !!networkPlayers[2]
+                && pair.includes(networkPlayers[1])
+                && pair.includes(networkPlayers[2])
+                && networkPlayers[1] !== networkPlayers[2];
+            const shouldRandomizeSeats = !existingSeatAssignment;
+            const randomizedPair = shouldRandomizeSeats
+                ? (Math.random() < 0.5 ? [...pair] : [pair[1], pair[0]])
+                : [networkPlayers[1], networkPlayers[2]];
+            networkPlayers[1] = randomizedPair[0] || null;
+            networkPlayers[2] = randomizedPair[1] || null;
+            syncMyAssignedPlayer();
+            const p1Name = networkPlayers[1] ? displayNameForPeer(networkPlayers[1]) : 'Waiting for P1 (Black)';
+            const p2Name = networkPlayers[2] ? displayNameForPeer(networkPlayers[2]) : 'Waiting for P2 (White)';
+            p1NameInput.value = p1Name + (networkPlayers[1] === myPeerId ? ' (Black)' : '');
+            p2NameInput.value = p2Name + (networkPlayers[2] === myPeerId ? ' (White)' : '');
+            if (!networkPlayers[1] || !networkPlayers[2]) {
+                currentPlayer = 1;
+                turnDeadlineTs = null;
+                stopMoveTimerInterval();
+                updateMoveTimerDisplay();
+                return;
+            }
+            const matchKey = `${networkPlayers[1]}-${networkPlayers[2]}`;
+            const isNewMatch = tournamentState.lastMatchKey !== matchKey;
+            const boardIsEmpty = !Array.isArray(board) || !board.length || !board.some((row) => Array.isArray(row) && row.some((cell) => cell !== 0));
+            if (isNewMatch || boardIsEmpty || !Number.isInteger(currentPlayer) || currentPlayer < 1 || currentPlayer > 2) {
+                currentPlayer = 1;
+                tournamentState.lastMatchKey = matchKey;
+            }
+            if (myPeerId === networkPlayers[1] || myPeerId === networkPlayers[2]) {
+                const isMyTurn = myPeerId === networkPlayers[1];
+                if (isNewMatch) {
+                    addNotification(
+                        isMyTurn
+                            ? `Tournament match started: ${displayNameForPeer(networkPlayers[1])} vs ${displayNameForPeer(networkPlayers[2])}. It is your turn to make the first move.`
+                            : `Tournament match started: ${displayNameForPeer(networkPlayers[1])} vs ${displayNameForPeer(networkPlayers[2])}. Waiting for your opponent's first move.`,
+                        { id: `tournament-turn:${matchKey}`, at: Date.now(), broadcast: false }
+                    );
+                }
+            }
+            debugLog('TOURNAMENT_PAIRING_UPDATED', { pairIndex: tournamentState.pairIndex, pair, randomizedPair, shouldRandomizeSeats, matchKey });
+        }
+
+        function getTournamentStandings() {
+            const standings = Object.keys(playerScoresByPeer).map((peerId) => ({
+                peerId,
+                name: displayNameForPeer(peerId),
+                wins: Number.isInteger(playerScoresByPeer[peerId]) ? playerScoresByPeer[peerId] : 0
+            }));
+            if (!standings.length) {
+                return [];
+            }
+            return standings.sort((a, b) => {
+                if (b.wins !== a.wins) return b.wins - a.wins;
+                return a.name.localeCompare(b.name);
+            });
+        }
+
+        function finalizeTournament() {
+            if (!tournamentState.enabled || tournamentState.finished) return;
+            tournamentState.finished = true;
+            tournamentState.enabled = false;
+            tournamentState.countdownDeadlineTs = null;
+            if (tournamentState.countdownTimer) {
+                clearInterval(tournamentState.countdownTimer);
+                tournamentState.countdownTimer = null;
+            }
+            const standings = getTournamentStandings();
+            const topThree = standings.slice(0, 3);
+            const labels = ['1st', '2nd', '3rd'];
+            const rankText = topThree.length
+                ? topThree.map((entry, index) => `${labels[index] || `${index + 1}th`} ${entry.name} (${entry.wins} wins)`).join(' • ')
+                : 'Tournament complete';
+            turnIndicator.innerHTML = `🏆 Tournament Final: ${rankText}`;
+            turnIndicator.style.color = '#f1c40f';
+            addNotification(`Tournament complete: ${rankText}.`, {
+                id: `tournament-finish:${Date.now()}`,
+                at: Date.now(),
+                broadcast: true
+            });
+            updateAllPlayersScoreboard();
+            startFireworks();
+            playTournamentJubilationSound();
+            debugLog('TOURNAMENT_FINISHED', { standings: topThree });
+        }
+
+        function advanceTournamentMatch(winnerPeerId) {
+            if (gameModeSelect.value !== 'webxdc-tournament' || !tournamentState.enabled) return;
+            const nextIndex = tournamentState.pairIndex + 1;
+            if (nextIndex >= tournamentState.pairings.length) {
+                setTimeout(() => finalizeTournament(), 400);
+                return;
+            }
+            tournamentState.pairIndex = nextIndex;
+            setTimeout(() => {
+                if (gameModeSelect.value !== 'webxdc-tournament') return;
+                const nextPair = tournamentState.pairings[tournamentState.pairIndex];
+                if (!nextPair || !nextPair[0] || !nextPair[1]) return;
+                initBoard(false);
+                updateTournamentMatchState(tournamentState.pairIndex);
+                updateTurnIndicator();
+                startMoveTimerForCurrentTurn({ resetDeadline: true });
+                updateAllPlayersScoreboard();
+            }, 600);
+        }
+
         function getPlayerDisplayName(playerNumber, peerId = null) {
             if (peerId) return displayNameForPeer(peerId);
             if (playerNumber === 1) return cleanPlayerName(p1NameInput.value);
@@ -595,8 +774,15 @@
 
         function shouldRunMoveTimer() {
             if (gameOver || !Array.isArray(board) || board.length !== boardSize) return false;
-            if (gameModeSelect.value !== 'webxdc') return true;
-            return !!networkPlayers[currentPlayer];
+            if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return true;
+
+            const localPlayerNumber = getLocalAssignedPlayerNumber();
+            if (localPlayerNumber !== null) {
+                return currentPlayer === localPlayerNumber && !!networkPlayers[currentPlayer];
+            }
+
+            // Spectators do not own a move timer; they observe the active player's countdown.
+            return false;
         }
 
         function stopMoveTimerInterval() {
@@ -608,6 +794,13 @@
 
         function updateMoveTimerDisplay() {
             if (!moveTimerEl) return;
+            if (gameModeSelect.value === 'webxdc-tournament' && tournamentState.enabled && !tournamentState.finished && Number.isFinite(tournamentState.countdownDeadlineTs)) {
+                const remainingMs = Math.max(0, tournamentState.countdownDeadlineTs - Date.now());
+                const remainingSec = Math.ceil(remainingMs / 1000);
+                moveTimerEl.textContent = `Tournament starts in ${remainingSec}s`;
+                moveTimerEl.style.color = remainingSec <= 5 ? '#ff7675' : '#c8d6e5';
+                return;
+            }
             if (gameOver) {
                 moveTimerEl.textContent = 'Move Timer: --';
                 moveTimerEl.style.color = '#c8d6e5';
@@ -643,23 +836,28 @@
             scores[currentPlayer]++;
             if (winnerPeerId) {
                 ensurePlayerScoreEntry(winnerPeerId);
-                playerScoresByPeer[winnerPeerId]++;
+                playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
             }
             updateAllPlayersScoreboard();
 
             turnIndicator.innerHTML = `⏰ <strong>${loserName}</strong> ran out of time. <strong>${winnerName}</strong> wins!`;
             turnIndicator.style.color = '#f1c40f';
             updateMoveTimerDisplay();
-            startFireworks();
+            if (gameModeSelect.value !== 'webxdc-tournament') {
+                startFireworks();
+            }
 
             addNotification(
                 `Game ended: ${loserName} ran out of time. ${winnerName} won.`,
                 {
                     id: `timeout:${loserPeerId || loserPlayer}:${winnerPeerId || winnerPlayer}:${countMoves(board)}`,
                     at: Date.now(),
-                    broadcast: source === 'local-timeout' && gameModeSelect.value === 'webxdc'
+                    broadcast: source === 'local-timeout' && isWebxdcNetworkMode()
                 }
             );
+            if (gameModeSelect.value === 'webxdc-tournament') {
+                advanceTournamentMatch(winnerPeerId || networkPlayers[winnerPlayer] || null);
+            }
             debugLog('MOVE_TIMEOUT_APPLIED', { loserPlayer, winnerPlayer, loserPeerId, winnerPeerId, source });
         }
 
@@ -670,7 +868,7 @@
             try {
                 const loserPlayer = currentPlayer;
                 const winnerPlayer = loserPlayer === 1 ? 2 : 1;
-                if (gameModeSelect.value === 'webxdc') {
+                if (gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament') {
                     const loserPeerId = networkPlayers[loserPlayer];
                     const winnerPeerId = networkPlayers[winnerPlayer];
                     if (!loserPeerId || !winnerPeerId) return;
@@ -742,6 +940,9 @@
                 at: Date.now(),
                 broadcast: false
             });
+            if (gameModeSelect.value === 'webxdc-tournament') {
+                updateTournamentMatchState();
+            }
             debugLog('PEER_LEFT_APPLIED', { peerId, source });
         }
 
@@ -769,27 +970,32 @@
             const quitterName = displayNameForPeer(quitterPeerId);
             scores[winnerPlayer]++;
             ensurePlayerScoreEntry(winnerPeerId);
-            playerScoresByPeer[winnerPeerId]++;
+            playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
             updateAllPlayersScoreboard();
             turnIndicator.innerHTML = `🏳️ <strong>${winnerName}</strong> wins by withdrawal`;
             turnIndicator.style.color = '#f1c40f';
             updateMoveTimerDisplay();
-            startFireworks();
+            if (gameModeSelect.value !== 'webxdc-tournament') {
+                startFireworks();
+            }
 
             const noteId = `withdrawal:${quitterPeerId || 'unknown'}:${winnerPeerId}:${countMoves(board)}`;
             const noteText = `${quitterName} withdrew. ${winnerName} wins the current game.`;
             addNotification(noteText, {
                 id: noteId,
                 at: Date.now(),
-                broadcast: source === 'local-detection'
+                broadcast: source === 'local-detection' || gameModeSelect.value === 'webxdc-tournament'
             });
+            if (gameModeSelect.value === 'webxdc-tournament') {
+                advanceTournamentMatch(winnerPeerId);
+            }
             debugLog('WITHDRAWAL_APPLIED', { quitterPeerId, winnerPeerId, source });
         }
 
         function startPlayerExitMonitor() {
             if (playerExitMonitorTimer) return;
             playerExitMonitorTimer = setInterval(() => {
-                if (gameModeSelect.value !== 'webxdc') return;
+                if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
                 const now = Date.now();
 
                 const stalePeers = Object.keys(connectedPlayers).filter((peerId) => {
@@ -1006,15 +1212,30 @@
 
             if (payload.action === 'JOIN' || payload.action === 'PRESENCE') return;
 
-            if (gameModeSelect.value !== 'webxdc') return;
+            if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
 
             if (payload.action === 'STATE') {
                 applyStatePayload(payload, meta);
+            } else if (payload.action === 'TOURNAMENT_MODE') {
+                if (payload.mode === 'webxdc-tournament') {
+                    beginTournamentMode({
+                        fromRemote: true,
+                        pairIndex: Number.isInteger(payload.pairIndex) ? payload.pairIndex : 0,
+                        schedule: Array.isArray(payload.schedule) ? payload.schedule : buildTournamentSchedule(),
+                        countdownDeadlineTs: Number.isFinite(payload.countdownDeadlineTs)
+                            ? payload.countdownDeadlineTs
+                            : Date.now() + 10000,
+                        broadcast: false
+                    });
+                }
+                updateModeSelectState();
+                updateAllPlayersScoreboard();
             } else if (payload.action === 'MOVE') {
                 if (!isOnBoard(payload.r, payload.c) || !board.length) return;
 
                 if (!networkPlayers[payload.player] && senderPeerId) {
                     networkPlayers[payload.player] = senderPeerId;
+                    syncMyAssignedPlayer();
                     if (payload.player === 1) p1NameInput.value = senderName + " (Black)";
                     if (payload.player === 2) p2NameInput.value = senderName + " (White)";
                     maybeAnnounceGameStart('remote-move-claim');
@@ -1023,6 +1244,7 @@
                 if (board[payload.r][payload.c] === payload.player) return;
 
                 currentPlayer = payload.player;
+                syncMyAssignedPlayer();
                 applyPieceLocally(payload.r, payload.c);
             } else if (payload.action === 'WITHDRAWAL') {
                 applyWithdrawalResult(payload.quitterPeerId, payload.winnerPeerId, 'remote-update');
@@ -1035,6 +1257,13 @@
                     source: 'remote-update'
                 });
             } else if (payload.action === 'RESET') {
+                const isTournamentReset = !!payload.tournamentReset || gameModeSelect.value === 'webxdc-tournament';
+                if (isTournamentReset) {
+                    gameModeSelect.value = 'webxdc-tournament';
+                    resetTournamentProgress();
+                    startTournamentCountdown();
+                    updateTournamentMatchState(0);
+                }
                 initBoard(false);
             }
         }
@@ -1110,7 +1339,9 @@
 
             allPlayersScoreboard.innerHTML = '';
             const title = document.createElement('h3');
-            title.textContent = 'Players Scoreboard';
+            title.textContent = gameModeSelect.value === 'webxdc-tournament' && tournamentState.finished
+                ? 'Tournament Standings'
+                : 'Players Scoreboard';
             allPlayersScoreboard.appendChild(title);
 
             const entries = rows.length
@@ -1123,7 +1354,9 @@
 
                 const nameEl = document.createElement('span');
                 nameEl.className = 'score-name';
-                nameEl.textContent = row.name;
+                nameEl.textContent = gameModeSelect.value === 'webxdc-tournament' && tournamentState.finished
+                    ? `${entries.indexOf(row) + 1}. ${row.name}`
+                    : row.name;
 
                 const scoreEl = document.createElement('span');
                 scoreEl.className = 'score-value';
@@ -1157,6 +1390,10 @@
             });
             updateConnectionIndicator();
             updateAllPlayersScoreboard();
+            updateModeSelectState();
+            if (gameModeSelect.value === 'webxdc-tournament') {
+                updateTournamentMatchState();
+            }
         }
 
         function normalizeAddr(addr) {
@@ -1231,7 +1468,7 @@
         // 'JOIN' announces us to the chat. 'PRESENCE' is the quiet reply an existing
         // player sends back to a newcomer, so discovery works in both directions.
         function announcePresence(action = 'JOIN') {
-            if (!window.webxdc || gameModeSelect.value !== 'webxdc') return;
+            if (!window.webxdc || (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament')) return;
 
             rememberConnectedPlayer(myPeerId, myName, myAddr);
 
@@ -1332,7 +1569,14 @@
                     gameStartAnnounced,
                     gameOver,
                     moveCount: countMoves(board),
-                    turnDeadlineTs
+                    turnDeadlineTs,
+                    gameMode: gameModeSelect.value,
+                    tournamentState: {
+                        enabled: tournamentState.enabled,
+                        pairIndex: tournamentState.pairIndex,
+                        finished: tournamentState.finished,
+                        countdownDeadlineTs: tournamentState.countdownDeadlineTs
+                    }
                 }
             };
         }
@@ -1369,6 +1613,19 @@
                 1: typeof state.networkPlayers?.[1] === 'string' ? state.networkPlayers[1] : null,
                 2: typeof state.networkPlayers?.[2] === 'string' ? state.networkPlayers[2] : null
             };
+            syncMyAssignedPlayer();
+            if (state.gameMode === 'webxdc-tournament' || state.tournamentState?.enabled) {
+                gameModeSelect.value = 'webxdc-tournament';
+                tournamentState.enabled = true;
+                tournamentState.finished = !!state.tournamentState?.finished;
+                tournamentState.pairIndex = Number.isInteger(state.tournamentState?.pairIndex) ? state.tournamentState.pairIndex : 0;
+                tournamentState.countdownDeadlineTs = Number.isFinite(state.tournamentState?.countdownDeadlineTs)
+                    ? state.tournamentState.countdownDeadlineTs
+                    : null;
+                if (state.gameMode === 'webxdc-tournament') {
+                    updateTournamentMatchState(tournamentState.pairIndex);
+                }
+            }
 
             if (typeof state.p1Name === 'string' && state.p1Name.trim()) p1NameInput.value = state.p1Name;
             if (typeof state.p2Name === 'string' && state.p2Name.trim()) p2NameInput.value = state.p2Name;
@@ -1413,7 +1670,7 @@
         }
 
         function broadcastStateSync(reason) {
-            if (!window.webxdc || gameModeSelect.value !== 'webxdc' || !board?.length) return;
+            if (!window.webxdc || (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') || !board?.length) return;
             const payload = buildStatePayload();
             sendXdcUpdate(payload, '', `Gomoku state sync (${reason})`);
             debugLog('STATE_SYNC_SENT', { reason, moveCount: payload.state.moveCount });
@@ -1428,6 +1685,114 @@
             });
         }
 
+        function updateModeSelectState() {
+            const tournamentInProgress = gameModeSelect.value === 'webxdc-tournament' && tournamentState.enabled && !tournamentState.finished;
+            gameModeSelect.disabled = tournamentInProgress;
+            resetBtn.disabled = tournamentInProgress;
+        }
+
+        function resetTournamentProgress() {
+            tournamentState.enabled = true;
+            tournamentState.finished = false;
+            tournamentState.schedule = buildTournamentSchedule();
+            tournamentState.pairIndex = 0;
+            tournamentState.lastMatchKey = null;
+            tournamentState.countdownDeadlineTs = Date.now() + 10000;
+            if (tournamentState.countdownTimer) {
+                clearInterval(tournamentState.countdownTimer);
+                tournamentState.countdownTimer = null;
+            }
+            networkPlayers = { 1: null, 2: null };
+            myAssignedPlayer = null;
+            playerScoresByPeer = {};
+            scores[1] = 0;
+            scores[2] = 0;
+            gameStartAnnounced = false;
+            updateAllPlayersScoreboard();
+        }
+
+        function startTournamentCountdown() {
+            if (gameModeSelect.value !== 'webxdc-tournament') return;
+            tournamentState.enabled = true;
+            tournamentState.finished = false;
+            tournamentState.schedule = buildTournamentSchedule();
+            tournamentState.pairIndex = 0;
+            tournamentState.lastMatchKey = null;
+            tournamentState.countdownDeadlineTs = Date.now() + 10000;
+            if (tournamentState.countdownTimer) clearInterval(tournamentState.countdownTimer);
+            tournamentState.countdownTimer = setInterval(() => {
+                if (gameModeSelect.value !== 'webxdc-tournament' || tournamentState.finished) {
+                    clearInterval(tournamentState.countdownTimer);
+                    tournamentState.countdownTimer = null;
+                    return;
+                }
+                const remainingMs = tournamentState.countdownDeadlineTs - Date.now();
+                updateMoveTimerDisplay();
+                if (remainingMs <= 0) {
+                    clearInterval(tournamentState.countdownTimer);
+                    tournamentState.countdownTimer = null;
+                    tournamentState.countdownDeadlineTs = null;
+                    if (tournamentState.schedule.length) {
+                        initBoard(false);
+                        updateTournamentMatchState(0);
+                        updateTurnIndicator();
+                    }
+                    updateMoveTimerDisplay();
+                    updateAllPlayersScoreboard();
+                    updateModeSelectState();
+                }
+            }, 250);
+            updateMoveTimerDisplay();
+            updateModeSelectState();
+        }
+
+        function beginTournamentMode({ fromRemote = false, pairIndex = 0, schedule = null, countdownDeadlineTs = null, broadcast = true } = {}) {
+            const nextSchedule = Array.isArray(schedule) ? schedule : buildTournamentSchedule();
+            const nextPairIndex = Number.isInteger(pairIndex) ? pairIndex : 0;
+            const nextCountdownDeadlineTs = Number.isFinite(countdownDeadlineTs)
+                ? countdownDeadlineTs
+                : Date.now() + 10000;
+
+            gameModeSelect.value = 'webxdc-tournament';
+            p1NameInput.disabled = true;
+            p2NameInput.disabled = true;
+            tournamentState.enabled = true;
+            tournamentState.finished = false;
+            tournamentState.schedule = nextSchedule;
+            tournamentState.pairIndex = nextPairIndex;
+            tournamentState.lastMatchKey = null;
+            tournamentState.countdownDeadlineTs = nextCountdownDeadlineTs;
+            networkPlayers = { 1: null, 2: null };
+            myAssignedPlayer = null;
+            initBoard(false);
+            updateTournamentMatchState(tournamentState.pairIndex);
+            startTournamentCountdown();
+            updateTurnIndicator();
+            updateAllPlayersScoreboard();
+
+            if (broadcast && window.webxdc) {
+                sendXdcUpdate({
+                    action: 'TOURNAMENT_MODE',
+                    mode: 'webxdc-tournament',
+                    pairIndex: tournamentState.pairIndex,
+                    countdownDeadlineTs: tournamentState.countdownDeadlineTs,
+                    schedule: tournamentState.schedule,
+                    peerId: myPeerId,
+                    name: myName,
+                    addr: myAddr
+                }, 'Tournament mode started', 'Tournament mode started');
+            }
+
+            if (!fromRemote) {
+                announcePresence();
+            }
+        }
+
+        function broadcastTournamentMode() {
+            if (!window.webxdc || gameModeSelect.value !== 'webxdc-tournament') return;
+            beginTournamentMode({ fromRemote: false, pairIndex: tournamentState.pairIndex, schedule: tournamentState.schedule, countdownDeadlineTs: tournamentState.countdownDeadlineTs, broadcast: true });
+        }
+
         gameModeSelect.addEventListener('change', (e) => {
             debugLog('GAME_MODE_CHANGED', { mode: e.target.value });
             if (e.target.value === 'pve') {
@@ -1435,17 +1800,25 @@
                 p1NameInput.value = "Player 1 (Black)";
                 p2NameInput.disabled = true; p1NameInput.disabled = false;
             } else if (e.target.value === 'webxdc') {
+                tournamentState.enabled = false;
+                tournamentState.finished = false;
+                tournamentState.countdownDeadlineTs = null;
                 p1NameInput.disabled = true; p2NameInput.disabled = true;
                 p1NameInput.value = networkPlayers[1] ? p1NameInput.value : "Waiting for P1 (Black)";
                 p2NameInput.value = networkPlayers[2] ? p2NameInput.value : "Waiting for P2 (White)";
                 announcePresence();
+            } else if (e.target.value === 'webxdc-tournament') {
+                beginTournamentMode({ fromRemote: false, broadcast: true });
             } else {
                 p1NameInput.value = "Player 1 (Black)";
                 p2NameInput.value = "Player 2 (White)";
                 p1NameInput.disabled = false; p2NameInput.disabled = false;
             }
+            updateModeSelectState();
             updateConnectionIndicator();
-            initBoard(true);
+            if (e.target.value !== 'webxdc-tournament') {
+                initBoard(true);
+            }
         });
 
         function initBoard(sendNetworkUpdate = false) {
@@ -1464,6 +1837,35 @@
                 if(p1NameInput.value.includes("Waiting")) p1NameInput.value = "Waiting for P1 (Black)";
                 if(p2NameInput.value.includes("Waiting")) p2NameInput.value = "Waiting for P2 (White)";
             }
+            if (gameModeSelect.value === 'webxdc-tournament') {
+                tournamentState.enabled = true;
+                tournamentState.schedule = buildTournamentSchedule();
+                if (!tournamentState.schedule.length) {
+                    networkPlayers = { 1: null, 2: null };
+                    myAssignedPlayer = null;
+                    gameStartAnnounced = false;
+                    rememberConnectedPlayer(myPeerId, myName, myAddr);
+                    return;
+                }
+                if (!Number.isInteger(tournamentState.pairIndex) || tournamentState.pairIndex < 0) {
+                    tournamentState.pairIndex = 0;
+                }
+                if (tournamentState.pairIndex >= tournamentState.schedule.length) {
+                    tournamentState.pairIndex = 0;
+                }
+                if (!networkPlayers[1] && !networkPlayers[2]) {
+                    updateTournamentMatchState(tournamentState.pairIndex);
+                } else {
+                    const matchPair = tournamentState.schedule[tournamentState.pairIndex];
+                    if (Array.isArray(matchPair) && matchPair.length === 2) {
+                        networkPlayers[1] = matchPair[0] || null;
+                        networkPlayers[2] = matchPair[1] || null;
+                    }
+                    syncMyAssignedPlayer();
+                }
+                gameStartAnnounced = false;
+                rememberConnectedPlayer(myPeerId, myName, myAddr);
+            }
 
             for (let r = 0; r < boardSize; r++) {
                 for (let c = 0; c < boardSize; c++) {
@@ -1478,9 +1880,15 @@
             updateTurnIndicator();
             updateConnectionIndicator();
 
-            if (sendNetworkUpdate && window.webxdc && gameModeSelect.value === 'webxdc') {
+            if (sendNetworkUpdate && window.webxdc && (gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament')) {
                 sendXdcUpdate(
-                    { action: 'RESET', addr: myAddr, name: myName, peerId: myPeerId },
+                    {
+                        action: 'RESET',
+                        tournamentReset: gameModeSelect.value === 'webxdc-tournament',
+                        addr: myAddr,
+                        name: myName,
+                        peerId: myPeerId
+                    },
                     `${myName} reset the game board.`,
                     `${myName} reset the game board.`
                 );
@@ -1491,6 +1899,11 @@
 
         function handleCellClick(e) {
             if (gameOver || isComputerThinking) return;
+
+            if (gameModeSelect.value === 'webxdc-tournament' && Number.isFinite(tournamentState.countdownDeadlineTs)) {
+                alert('Tournament has not started yet. Please wait for the countdown to finish.');
+                return;
+            }
             
             // Robust click targeting logic
             const cell = e.target.closest('.cell');
@@ -1501,18 +1914,36 @@
 
             if (isNaN(r) || isNaN(c) || board[r][c] !== 0) return; 
 
-            if (gameModeSelect.value === 'webxdc') {
+            if (gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament') {
                 const p1Owner = networkPlayers[1];
                 const p2Owner = networkPlayers[2];
                 const bothPlayersAssigned = !!p1Owner && !!p2Owner;
                 const iAmSpectator = bothPlayersAssigned && p1Owner !== myPeerId && p2Owner !== myPeerId;
-                if (iAmSpectator) {
+                if (gameModeSelect.value === 'webxdc-tournament' && !iAmSpectator && (myPeerId !== p1Owner && myPeerId !== p2Owner)) {
+                    alert("Waiting for pairing.");
+                    debugLog('MOVE_BLOCKED', { reason: 'tournament-waiting-for-pairing', myPeerId, p1Owner, p2Owner });
+                    return;
+                }
+                if (gameModeSelect.value === 'webxdc' && iAmSpectator) {
                     alert("Game already in progress between Player 1 and Player 2. You joined as a spectator.");
                     debugLog('MOVE_BLOCKED', {
                         reason: 'spectator-joined-active-game',
                         myPeerId,
                         p1Owner,
                         p2Owner
+                    });
+                    return;
+                }
+
+                const localPlayerNumber = getLocalAssignedPlayerNumber();
+                if (gameModeSelect.value === 'webxdc-tournament' && localPlayerNumber !== null && currentPlayer !== localPlayerNumber) {
+                    alert("It is not your turn!");
+                    debugLog('MOVE_BLOCKED', {
+                        reason: 'tournament-turn-mismatch',
+                        expectedPlayer: localPlayerNumber,
+                        actualPlayer: currentPlayer,
+                        myPeerId,
+                        networkPlayers
                     });
                     return;
                 }
@@ -1541,7 +1972,7 @@
                 // Optimistic UI: Claim slot locally immediately to prevent double clicking
                 if (!networkPlayers[playedAs]) {
                     networkPlayers[playedAs] = myPeerId;
-                    if (!myAssignedPlayer) myAssignedPlayer = playedAs;
+                    myAssignedPlayer = playedAs;
                     if (playedAs === 1) p1NameInput.value = myName + " (Black)";
                     if (playedAs === 2) p2NameInput.value = myName + " (White)";
                     debugLog('PLAYER_SLOT_CLAIMED_LOCAL', {
@@ -1553,6 +1984,7 @@
                 }
 
                 // Optimistic UI: Apply it immediately to the local board
+                syncMyAssignedPlayer();
                 applyPieceLocally(r, c);
 
                 // Broadcast it silently to the chat network
@@ -1667,7 +2099,7 @@
             const winnerPeerId = networkPlayers[player];
             if (winnerPeerId) {
                 ensurePlayerScoreEntry(winnerPeerId);
-                playerScoresByPeer[winnerPeerId]++;
+                playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
             }
             updateAllPlayersScoreboard();
             addNotification(
@@ -1675,13 +2107,17 @@
                 {
                     id: `game-end:${winnerPeerId || 'unknown'}:${countMoves(board)}`,
                     at: Date.now(),
-                    broadcast: gameModeSelect.value === 'webxdc' && winnerPeerId === myPeerId
+                    broadcast: isWebxdcNetworkMode() && winnerPeerId === myPeerId
                 }
             );
-            startFireworks();
+            if (gameModeSelect.value === 'webxdc-tournament') {
+                advanceTournamentMatch(winnerPeerId || networkPlayers[player] || null);
+            } else {
+                startFireworks();
+            }
 
-            if (gameModeSelect.value === 'webxdc' && window.webxdc && networkPlayers[player] === myPeerId) {
-                 sendXdcUpdate(
+            if (isWebxdcNetworkMode() && window.webxdc && networkPlayers[player] === myPeerId) {
+                sendXdcUpdate(
                     { action: 'WIN' },
                     `${myName} won the game!`,
                     `Gomoku: ${myName} won the game!`
@@ -1690,10 +2126,28 @@
         }
 
         function updateTurnIndicator() {
-            let name = currentPlayer === 1 ? p1NameInput.value : p2NameInput.value;
+            const name = currentPlayer === 1 ? p1NameInput.value : p2NameInput.value;
             const color = currentPlayer === 1 ? '(Black)' : '(White)';
+            const activePeerId = networkPlayers[currentPlayer] || null;
+            const activeName = activePeerId
+                ? displayNameForPeer(activePeerId)
+                : (name || (currentPlayer === 1 ? 'Black' : 'White')).replace(/\(.*\)/, '').trim();
             
-            if (
+            if (gameModeSelect.value === 'webxdc-tournament') {
+                const activePair = networkPlayers[1] && networkPlayers[2];
+                const localPlayerNumber = getLocalAssignedPlayerNumber();
+                const iAmPlaying = localPlayerNumber !== null;
+                const isLocalTurn = localPlayerNumber !== null && currentPlayer === localPlayerNumber;
+                if (!activePair) {
+                    turnIndicator.innerHTML = 'Current Turn: Waiting for pairing';
+                } else if (!iAmPlaying) {
+                    turnIndicator.innerHTML = 'Current Turn: Waiting for pairing';
+                } else if (isLocalTurn) {
+                    turnIndicator.innerHTML = `Current Turn: <strong>You</strong> ${color}`;
+                } else {
+                    turnIndicator.innerHTML = `Current Turn: ${activeName} ${color}`;
+                }
+            } else if (
                 gameModeSelect.value === 'webxdc'
                 && myAssignedPlayer
                 && currentPlayer !== myAssignedPlayer
@@ -1703,7 +2157,7 @@
             } else if (gameModeSelect.value === 'webxdc' && networkPlayers[currentPlayer] === myPeerId) {
                 turnIndicator.innerHTML = `Current Turn: <strong>You</strong> ${color}`;
             } else {
-                turnIndicator.innerHTML = `Current Turn: ${name.replace(/\(.*\)/, '')} ${color}`;
+                turnIndicator.innerHTML = `Current Turn: ${activeName} ${color}`;
             }
             turnIndicator.style.color = '#ecf0f1';
             startMoveTimerForCurrentTurn({ resetDeadline: false });
@@ -1711,7 +2165,15 @@
 
         p1NameInput.addEventListener('input', updateTurnIndicator);
         p2NameInput.addEventListener('input', updateTurnIndicator);
-        resetBtn.addEventListener('click', () => initBoard(true));
+        resetBtn.addEventListener('click', () => {
+            if (gameModeSelect.value === 'webxdc-tournament') {
+                gameModeSelect.value = 'webxdc-tournament';
+                resetTournamentProgress();
+                startTournamentCountdown();
+                updateTournamentMatchState(0);
+            }
+            initBoard(true);
+        });
         menuActionsSelect.addEventListener('change', (e) => {
             if (e.target.value === 'debug-logs') showDebugPanel();
             if (e.target.value === 'notifications') showNotificationsPanel();
@@ -1817,6 +2279,33 @@
             particles = [];
         }
 
+        let jubilationAudioContext = null;
+        function playTournamentJubilationSound() {
+            try {
+                const AudioCtor = window.AudioContext || window.webkitAudioContext;
+                if (!AudioCtor) return;
+                if (!jubilationAudioContext) jubilationAudioContext = new AudioCtor();
+                const context = jubilationAudioContext;
+                const notes = [392, 523.25, 659.25, 783.99];
+                notes.forEach((frequency, index) => {
+                    const oscillator = context.createOscillator();
+                    const gain = context.createGain();
+                    oscillator.type = 'triangle';
+                    oscillator.frequency.value = frequency;
+                    gain.gain.value = 0.0001;
+                    oscillator.connect(gain);
+                    gain.connect(context.destination);
+                    const startAt = context.currentTime + (index * 0.15);
+                    oscillator.start(startAt);
+                    gain.gain.exponentialRampToValueAtTime(0.08, startAt + 0.04);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.55);
+                    oscillator.stop(startAt + 0.6);
+                });
+            } catch (err) {
+                console.warn('Gomoku: could not play tournament sound', err);
+            }
+        }
+
         // Boot
         const chatInstanceInfo = getChatInstanceInfo();
         debugLog('APP_BOOT', { appVersion, myPeerId, myAddr, myName });
@@ -1829,7 +2318,7 @@
         startPresenceSync();
         startPlayerExitMonitor();
         setTimeout(() => {
-            if (gameModeSelect.value !== 'webxdc') return;
+            if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
             if (!remoteUpdateSeen && Object.keys(connectedPlayers).length <= 1) {
                 debugLog('NO_REMOTE_UPDATES_HINT', {
                     message: 'No inbound updates seen after startup. Most common cause: peers are not running the same shared .xdc message instance in chat.'
@@ -1841,6 +2330,20 @@
             p2NameInput.value = "Waiting for P2 (White)";
             p1NameInput.disabled = true; p2NameInput.disabled = true;
             announcePresence();
+        } else if (gameModeSelect.value === 'webxdc-tournament') {
+            p1NameInput.value = "Waiting for P1 (Black)";
+            p2NameInput.value = "Waiting for P2 (White)";
+            p1NameInput.disabled = true; p2NameInput.disabled = true;
+            tournamentState.enabled = true;
+            tournamentState.finished = false;
+            tournamentState.schedule = buildTournamentSchedule();
+            tournamentState.pairIndex = 0;
+            tournamentState.lastMatchKey = null;
+            tournamentState.countdownDeadlineTs = Date.now() + 10000;
+            updateTournamentMatchState(0);
+            startTournamentCountdown();
+            announcePresence();
+            broadcastTournamentMode();
         }
         initBoard(false);
     </script>

@@ -1687,7 +1687,15 @@
 
         function updateModeSelectState() {
             const tournamentInProgress = gameModeSelect.value === 'webxdc-tournament' && tournamentState.enabled && !tournamentState.finished;
-            gameModeSelect.disabled = tournamentInProgress;
+            const totalPlayers = new Set([myPeerId, ...Object.keys(connectedPlayers)].filter(Boolean)).size;
+            const tournamentOption = [...gameModeSelect.options].find((option) => option.value === 'webxdc-tournament');
+            if (tournamentOption) {
+                tournamentOption.hidden = totalPlayers < 2;
+                tournamentOption.disabled = totalPlayers < 2;
+                if (totalPlayers < 2 && gameModeSelect.value === 'webxdc-tournament') {
+                    gameModeSelect.value = 'webxdc';
+                }
+            }
             resetBtn.disabled = tournamentInProgress;
         }
 
@@ -1795,6 +1803,14 @@
 
         gameModeSelect.addEventListener('change', (e) => {
             debugLog('GAME_MODE_CHANGED', { mode: e.target.value });
+            const totalPlayers = new Set([
+                myPeerId,
+                ...Object.keys(connectedPlayers)
+            ].filter(Boolean)).size;
+            if (e.target.value === 'webxdc-tournament' && totalPlayers < 2) {
+                gameModeSelect.value = 'webxdc';
+                return;
+            }
             if (e.target.value === 'pve') {
                 p2NameInput.value = "Computer (White)";
                 p1NameInput.value = "Player 1 (Black)";

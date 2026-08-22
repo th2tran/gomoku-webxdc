@@ -23,6 +23,9 @@
             padding: 20px;
             overflow-x: hidden;
         }
+        body.debug-open {
+            align-items: flex-start;
+        }
 
         h1 { margin-top: 0; margin-bottom: 10px; font-size: 28px; }
 
@@ -47,8 +50,36 @@
         }
         .player-info input:disabled { background: #ecf0f1; color: #7f8c8d; }
 
-        .score { font-size: 24px; font-weight: bold; color: #f1c40f; }
         .turn-indicator { font-size: 16px; margin-bottom: 15px; font-weight: bold; color: #ecf0f1; text-align: center; }
+        .all-players-scoreboard {
+            width: 100%;
+            max-width: 600px;
+            margin: 0 0 14px 0;
+            padding: 10px 12px;
+            background: #34495e;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            font-size: 14px;
+        }
+        .all-players-scoreboard h3 {
+            margin: 0 0 8px 0;
+            font-size: 15px;
+            color: #f1c40f;
+        }
+        .all-players-scoreboard .score-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 3px 0;
+        }
+        .all-players-scoreboard .score-row .score-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .all-players-scoreboard .score-row .score-value {
+            font-weight: bold;
+        }
 
         #board {
             display: grid;
@@ -93,6 +124,130 @@
         button:hover { background-color: #2ecc71; }
         button:disabled { background-color: #7f8c8d; cursor: not-allowed; }
 
+        .debug-popup {
+            display: none;
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: min(760px, calc(100vw - 24px));
+            max-height: min(80vh, calc(100vh - 24px));
+            z-index: 250;
+            pointer-events: none;
+        }
+        .debug-popup.visible { display: block; }
+        .debug-panel {
+            width: 100%;
+            max-height: inherit;
+            background: #1f2d3a;
+            border: 1px solid #4a6075;
+            border-radius: 8px;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+            display: flex;
+            flex-direction: column;
+            pointer-events: auto;
+        }
+        .debug-panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 12px;
+            border-bottom: 1px solid #4a6075;
+            font-weight: bold;
+            cursor: move;
+            user-select: none;
+            touch-action: none;
+        }
+        .debug-panel-actions { display: flex; gap: 8px; }
+        .debug-panel-actions button {
+            padding: 6px 10px;
+            font-size: 13px;
+            background: #52677d;
+        }
+        .debug-search-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding: 8px 12px;
+            border-bottom: 1px solid #4a6075;
+        }
+        .debug-search-row input {
+            flex: 1;
+            min-width: 0;
+            padding: 6px 8px;
+            border: 1px solid #4a6075;
+            border-radius: 4px;
+            background: #12202d;
+            color: #d6e4f0;
+        }
+        .debug-search-count {
+            font-size: 12px;
+            color: #9eb4c8;
+            min-width: 72px;
+            text-align: right;
+        }
+        .debug-log {
+            margin: 0;
+            padding: 12px;
+            overflow: auto;
+            white-space: pre-wrap;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 12px;
+            line-height: 1.35;
+            color: #d6e4f0;
+            min-height: 260px;
+        }
+        .notifications-popup {
+            display: none;
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: min(440px, 38vw);
+            height: 100vh;
+            max-height: 100vh;
+            z-index: 245;
+            pointer-events: none;
+        }
+        .notifications-popup.visible { display: block; }
+        .notifications-panel {
+            width: 100%;
+            height: 100%;
+            max-height: 100%;
+            background: #1f2d3a;
+            border: 1px solid #4a6075;
+            border-right: none;
+            border-radius: 0;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+            display: flex;
+            flex-direction: column;
+            pointer-events: auto;
+        }
+        .notifications-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 12px;
+            border-bottom: 1px solid #4a6075;
+            font-weight: bold;
+            user-select: none;
+        }
+        .notifications-actions { display: flex; gap: 8px; }
+        .notifications-actions button {
+            padding: 6px 10px;
+            font-size: 13px;
+            background: #52677d;
+        }
+        .notifications-log {
+            margin: 0;
+            padding: 12px;
+            overflow: auto;
+            white-space: pre-wrap;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 12px;
+            line-height: 1.35;
+            color: #d6e4f0;
+            min-height: 180px;
+        }
+
         #fireworksCanvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 100; }
     </style>
 </head>
@@ -103,16 +258,18 @@
     <div class="dashboard">
         <div class="player-info">
             <input type="text" id="p1-name" value="Waiting for P1 (Black)">
-            <div class="score" id="p1-score">0</div>
         </div>
         <div class="player-info">
             <input type="text" id="p2-name" value="Waiting for P2 (White)">
-            <div class="score" id="p2-score">0</div>
         </div>
     </div>
 
+    <div class="all-players-scoreboard" id="all-players-scoreboard">
+        <h3>Players Scoreboard</h3>
+        <div class="score-row"><span class="score-name">No players yet</span><span class="score-value">0</span></div>
+    </div>
+
     <div class="turn-indicator" id="turn-indicator">Current Turn: Waiting for P1 (Black)</div>
-    <div class="connection-indicator" id="connection-indicator" style="display: none;"></div>
 
     <div id="board"></div>
 
@@ -122,108 +279,973 @@
             <option value="pvp">Local Pass & Play</option>
             <option value="pve">Local vs Computer</option>
         </select>
+        <select id="menu-actions">
+            <option value="">Menu</option>
+            <option value="debug-logs">Debug Logs</option>
+        </select>
         <button id="reset-btn">Reset Board / Sync</button>
     </div>
 
     <canvas id="fireworksCanvas"></canvas>
+    <div class="debug-popup" id="debug-popup" aria-hidden="true">
+        <div class="debug-panel" id="debug-panel">
+            <div class="debug-panel-header" id="debug-panel-header">
+                <span>Gomoku Debug Logs</span>
+                <div class="debug-panel-actions">
+                    <button id="debug-clear-btn" type="button">Clear</button>
+                    <button id="debug-close-btn" type="button">Close</button>
+                </div>
+            </div>
+            <div class="debug-search-row">
+                <input id="debug-search-input" type="text" placeholder="Search logs...">
+                <span class="debug-search-count" id="debug-search-count">0</span>
+            </div>
+            <pre class="debug-log" id="debug-log"></pre>
+        </div>
+    </div>
+    <div class="notifications-popup" id="notifications-popup" aria-hidden="true">
+        <div class="notifications-panel" id="notifications-panel">
+            <div class="notifications-header" id="notifications-header">
+                <span>Notifications</span>
+                <div class="notifications-actions">
+                    <button id="notifications-clear-btn" type="button">Clear</button>
+                </div>
+            </div>
+            <pre class="notifications-log" id="notifications-log"></pre>
+        </div>
+    </div>
 
+    <script src="version.js"></script>
     <script>
         const boardSize = 15;
+        const appVersion = (window.GOMOKU_APP_VERSION && String(window.GOMOKU_APP_VERSION).trim()) || 'dev';
         let board = [];
         let currentPlayer = 1; 
         let gameOver = false;
         let scores = { 1: 0, 2: 0 };
+        let playerScoresByPeer = {};
         let isComputerThinking = false;
         
         let networkPlayers = { 1: null, 2: null };
+        let myAssignedPlayer = null;
         let connectedPlayers = {};
-        let myAddr = window.webxdc ? window.webxdc.selfAddr : 'local_user';
-        let myName = window.webxdc ? window.webxdc.selfName : 'Player';
+        const fallbackAddr = `session_${Math.random().toString(36).slice(2)}`;
+        const myPeerId = `peer_${Math.random().toString(36).slice(2)}`;
+        let myAddr = window.webxdc
+            ? (window.webxdc.selfAddr || window.webxdc.selfAddress || fallbackAddr)
+            : 'local_user';
+        let myName = window.webxdc ? (window.webxdc.selfName || 'Player') : 'Player';
 
         const boardElement = document.getElementById('board');
+        const allPlayersScoreboard = document.getElementById('all-players-scoreboard');
         const turnIndicator = document.getElementById('turn-indicator');
-        const connectionIndicator = document.getElementById('connection-indicator');
         const p1NameInput = document.getElementById('p1-name');
         const p2NameInput = document.getElementById('p2-name');
-        const p1ScoreEl = document.getElementById('p1-score');
-        const p2ScoreEl = document.getElementById('p2-score');
         const gameModeSelect = document.getElementById('game-mode');
+        const menuActionsSelect = document.getElementById('menu-actions');
         const resetBtn = document.getElementById('reset-btn');
+        const debugPopup = document.getElementById('debug-popup');
+        const debugPanel = document.getElementById('debug-panel');
+        const debugPanelHeader = document.getElementById('debug-panel-header');
+        const debugSearchInput = document.getElementById('debug-search-input');
+        const debugSearchCount = document.getElementById('debug-search-count');
+        const debugLogEl = document.getElementById('debug-log');
+        const debugCloseBtn = document.getElementById('debug-close-btn');
+        const debugClearBtn = document.getElementById('debug-clear-btn');
+        const notificationsPopup = document.getElementById('notifications-popup');
+        const notificationsPanel = document.getElementById('notifications-panel');
+        const notificationsHeader = document.getElementById('notifications-header');
+        const notificationsLogEl = document.getElementById('notifications-log');
+        const notificationsClearBtn = document.getElementById('notifications-clear-btn');
+        const debugEntries = [];
+        const maxDebugEntries = 200;
+        const notifications = [];
+        const notificationIds = new Set();
+        const maxNotifications = 200;
+        let debugSearchQuery = '';
+        let presenceSyncTimer = null;
+        let playerExitMonitorTimer = null;
+        let remoteUpdateSeen = false;
+        let debugDragState = null;
+        let webxdcRealtimeChannel = null;
+        let outgoingMessageSeq = 0;
+        let notificationSeq = 0;
+        const seenMessageIds = new Set();
+        const seenMessageIdQueue = [];
+        const maxSeenMessageIds = 500;
+        let gameStartAnnounced = false;
+        const playerStaleMs = 45000;
+        const knownLeftPeers = new Set();
 
-        function rememberConnectedPlayer(addr, name) {
-            if (!addr) return;
-            connectedPlayers[addr] = {
+        function getChatInstanceInfo() {
+            if (!window.webxdc) {
+                return { instanceId: 'local-dev', source: 'no-webxdc-runtime' };
+            }
+
+            const candidates = [
+                ['chatId', window.webxdc.chatId],
+                ['instanceId', window.webxdc.instanceId],
+                ['conversationId', window.webxdc.conversationId],
+                ['threadId', window.webxdc.threadId],
+                ['messageId', window.webxdc.messageId],
+                ['msgId', window.webxdc.msgId]
+            ];
+
+            for (const [key, value] of candidates) {
+                if (typeof value === 'string' && value.trim()) {
+                    return { instanceId: value.trim(), source: `webxdc.${key}` };
+                }
+            }
+
+            return {
+                instanceId: 'not-exposed-by-host',
+                source: 'webxdc-api',
+                note: 'Host client does not expose chat instance ID to apps.'
+            };
+        }
+
+        function stringifyDebugValue(value) {
+            try {
+                if (value === undefined) return 'undefined';
+                return JSON.stringify(value);
+            } catch (err) {
+                return `[unserializable: ${err.message}]`;
+            }
+        }
+
+        function renderDebugLog() {
+            if (!debugLogEl) return;
+
+            const query = debugSearchQuery.trim().toLowerCase();
+            const filteredEntries = query
+                ? debugEntries.filter((line) => line.toLowerCase().includes(query))
+                : debugEntries;
+
+            debugLogEl.textContent = filteredEntries.join('\n');
+            debugLogEl.scrollTop = debugLogEl.scrollHeight;
+
+            if (debugSearchCount) {
+                debugSearchCount.textContent = query
+                    ? `${filteredEntries.length}/${debugEntries.length}`
+                    : `${debugEntries.length}`;
+            }
+        }
+
+        function debugLog(eventName, payload = {}) {
+            const timestamp = new Date().toISOString().split('T')[1].replace('Z', '');
+            const line = `[${timestamp}] ${eventName} ${stringifyDebugValue(payload)}`;
+            debugEntries.push(line);
+            if (debugEntries.length > maxDebugEntries) debugEntries.shift();
+            renderDebugLog();
+
+            console.log('[GomokuDebug]', eventName, payload);
+        }
+
+        function updateSidePanelLayoutClass() {
+            const anyPanelOpen = debugPopup.classList.contains('visible')
+                || notificationsPopup.classList.contains('visible');
+            document.body.classList.toggle('debug-open', anyPanelOpen);
+        }
+
+        function formatNotificationTimestamp(ts) {
+            if (!Number.isFinite(ts)) return '--:--:--';
+            try {
+                return new Date(ts).toLocaleTimeString();
+            } catch (_) {
+                return '--:--:--';
+            }
+        }
+
+        function renderNotifications() {
+            if (!notificationsLogEl) return;
+            if (!notifications.length) {
+                notificationsLogEl.textContent = '[No notifications yet]';
+                return;
+            }
+            notificationsLogEl.textContent = notifications
+                .map((entry) => `[${formatNotificationTimestamp(entry.at)}] ${entry.text}`)
+                .join('\n');
+            notificationsLogEl.scrollTop = notificationsLogEl.scrollHeight;
+        }
+
+        function addNotification(text, options = {}) {
+            if (typeof text !== 'string' || !text.trim()) return;
+            const noteText = text.trim();
+            const noteId = options.id || `note:${myPeerId}:${Date.now()}:${++notificationSeq}`;
+            if (notificationIds.has(noteId)) return;
+
+            const noteAt = Number.isFinite(options.at) ? options.at : Date.now();
+            notificationIds.add(noteId);
+            notifications.push({ id: noteId, at: noteAt, text: noteText });
+            if (notifications.length > maxNotifications) {
+                const removed = notifications.shift();
+                if (removed?.id) notificationIds.delete(removed.id);
+            }
+            renderNotifications();
+
+            if (options.broadcast && window.webxdc && gameModeSelect.value === 'webxdc') {
+                sendXdcUpdate({
+                    action: 'NOTIFY',
+                    noteId,
+                    noteText,
+                    noteAt,
+                    addr: myAddr,
+                    name: myName,
+                    peerId: myPeerId
+                }, noteText, `Gomoku notification`);
+            }
+        }
+
+        function cleanPlayerName(name) {
+            if (typeof name !== 'string') return 'Player';
+            const cleaned = name.replace(/\(.*\)/, '').trim();
+            return cleaned || 'Player';
+        }
+
+        function showDebugPanel() {
+            debugPopup.classList.add('visible');
+            debugPopup.setAttribute('aria-hidden', 'false');
+            if (!debugPopup.style.left && !debugPopup.style.top) {
+                const popupWidth = debugPopup.getBoundingClientRect().width;
+                const initialLeft = Math.max(8, window.innerWidth - popupWidth - 20);
+                debugPopup.style.left = `${initialLeft}px`;
+                debugPopup.style.top = '20px';
+                debugPopup.style.right = 'auto';
+            }
+            clampDebugPopupToViewport();
+            updateSidePanelLayoutClass();
+            debugLog('DEBUG_PANEL_OPENED', { entries: debugEntries.length });
+        }
+
+        function hideDebugPanel() {
+            debugPopup.classList.remove('visible');
+            debugPopup.setAttribute('aria-hidden', 'true');
+            updateSidePanelLayoutClass();
+        }
+
+        function showNotificationsPanel() {
+            notificationsPopup.classList.add('visible');
+            notificationsPopup.setAttribute('aria-hidden', 'false');
+            notificationsPopup.style.top = '0';
+            notificationsPopup.style.right = '0';
+            updateSidePanelLayoutClass();
+        }
+
+        function hideNotificationsPanel() {
+            // Notifications panel is intentionally persistent once opened.
+        }
+
+        function clampDebugPopupToViewport() {
+            if (!debugPopup.classList.contains('visible')) return;
+            const rect = debugPopup.getBoundingClientRect();
+            const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+            const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+            const currentLeft = Number.parseFloat(debugPopup.style.left || `${rect.left}`) || 8;
+            const currentTop = Number.parseFloat(debugPopup.style.top || `${rect.top}`) || 8;
+            const nextLeft = Math.min(maxLeft, Math.max(8, currentLeft));
+            const nextTop = Math.min(maxTop, Math.max(8, currentTop));
+            debugPopup.style.left = `${nextLeft}px`;
+            debugPopup.style.top = `${nextTop}px`;
+            debugPopup.style.right = 'auto';
+        }
+
+        function startPresenceSync() {
+            if (presenceSyncTimer || !window.webxdc) return;
+            presenceSyncTimer = setInterval(() => {
+                if (gameModeSelect.value !== 'webxdc') return;
+                announcePresence('PRESENCE');
+            }, 15000);
+            debugLog('PRESENCE_SYNC_STARTED', { intervalMs: 15000 });
+        }
+
+        function maybeAnnounceGameStart(source = 'unknown') {
+            if (gameStartAnnounced) return;
+            const p1Owner = networkPlayers[1];
+            const p2Owner = networkPlayers[2];
+            if (!p1Owner || !p2Owner) return;
+
+            const p1Name = cleanPlayerName(p1NameInput.value);
+            const p2Name = cleanPlayerName(p2NameInput.value);
+            const noteText = `New game started: ${p1Name} (Black) vs ${p2Name} (White).`;
+            const noteId = `game-start:${p1Owner}:${p2Owner}:${countMoves(board)}`;
+            addNotification(noteText, { id: noteId, at: Date.now(), broadcast: true });
+            gameStartAnnounced = true;
+            debugLog('GAME_START_ANNOUNCED', { source, p1Owner, p2Owner });
+        }
+
+        function applyPeerLeft(peerId, source = 'unknown', leaveEventId = null, noteText = null) {
+            if (!peerId || peerId === myPeerId) return;
+            if (knownLeftPeers.has(peerId)) return;
+            knownLeftPeers.add(peerId);
+
+            const leaverName = displayNameForPeer(peerId);
+            delete connectedPlayers[peerId];
+            updateConnectionIndicator();
+            updateAllPlayersScoreboard();
+
+            addNotification(noteText || `${leaverName} left the game.`, {
+                id: leaveEventId || `leave-local:${peerId}`,
+                at: Date.now(),
+                broadcast: false
+            });
+            debugLog('PEER_LEFT_APPLIED', { peerId, source });
+        }
+
+        function applyWithdrawalResult(quitterPeerId, winnerPeerId, source = 'unknown') {
+            if (!winnerPeerId || gameOver) return;
+            const winnerPlayer = networkPlayers[1] === winnerPeerId ? 1
+                : networkPlayers[2] === winnerPeerId ? 2
+                : null;
+            if (!winnerPlayer) return;
+
+            gameOver = true;
+            currentPlayer = winnerPlayer;
+            const winnerName = displayNameForPeer(winnerPeerId);
+            const quitterName = displayNameForPeer(quitterPeerId);
+            scores[winnerPlayer]++;
+            ensurePlayerScoreEntry(winnerPeerId);
+            playerScoresByPeer[winnerPeerId]++;
+            updateAllPlayersScoreboard();
+            turnIndicator.innerHTML = `🏳️ <strong>${winnerName}</strong> wins by withdrawal`;
+            turnIndicator.style.color = '#f1c40f';
+            startFireworks();
+
+            const noteId = `withdrawal:${quitterPeerId || 'unknown'}:${winnerPeerId}:${countMoves(board)}`;
+            const noteText = `${quitterName} withdrew. ${winnerName} wins the current game.`;
+            addNotification(noteText, {
+                id: noteId,
+                at: Date.now(),
+                broadcast: source === 'local-detection'
+            });
+            debugLog('WITHDRAWAL_APPLIED', { quitterPeerId, winnerPeerId, source });
+        }
+
+        function startPlayerExitMonitor() {
+            if (playerExitMonitorTimer) return;
+            playerExitMonitorTimer = setInterval(() => {
+                if (gameModeSelect.value !== 'webxdc') return;
+                const now = Date.now();
+
+                const stalePeers = Object.keys(connectedPlayers).filter((peerId) => {
+                    if (!peerId || peerId === myPeerId) return false;
+                    const lastSeen = connectedPlayers[peerId]?.lastSeen;
+                    if (!Number.isFinite(lastSeen)) return false;
+                    return now - lastSeen > playerStaleMs && !knownLeftPeers.has(peerId);
+                });
+                if (!stalePeers.length) return;
+
+                for (const stalePeer of stalePeers) {
+                    const leaveEventId = `leave:${stalePeer}:${Date.now()}`;
+                    const leaverName = displayNameForPeer(stalePeer);
+                    applyPeerLeft(stalePeer, 'local-detection', leaveEventId, `${leaverName} left the game.`);
+
+                    sendXdcUpdate({
+                        action: 'LEAVE',
+                        leftPeerId: stalePeer,
+                        leaveEventId,
+                        noteText: `${leaverName} left the game.`,
+                        addr: myAddr,
+                        name: myName,
+                        peerId: myPeerId
+                    }, `${leaverName} left the game.`, 'Player left');
+
+                    const p1Owner = networkPlayers[1];
+                    const p2Owner = networkPlayers[2];
+                    if (!gameOver && p1Owner && p2Owner && countMoves(board) > 0 && (stalePeer === p1Owner || stalePeer === p2Owner)) {
+                        const winnerPeerId = stalePeer === p1Owner ? p2Owner : p1Owner;
+                        if (winnerPeerId) {
+                            applyWithdrawalResult(stalePeer, winnerPeerId, 'local-detection');
+                            sendXdcUpdate({
+                                action: 'WITHDRAWAL',
+                                quitterPeerId: stalePeer,
+                                winnerPeerId,
+                                addr: myAddr,
+                                name: myName,
+                                peerId: myPeerId
+                            }, `${displayNameForPeer(stalePeer)} withdrew.`, 'Withdrawal detected');
+                            broadcastStateSync('withdrawal');
+                        }
+                    }
+                }
+            }, 5000);
+        }
+
+        function rememberSeenMessageId(messageId) {
+            if (!messageId || seenMessageIds.has(messageId)) return;
+            seenMessageIds.add(messageId);
+            seenMessageIdQueue.push(messageId);
+            if (seenMessageIdQueue.length > maxSeenMessageIds) {
+                const oldest = seenMessageIdQueue.shift();
+                if (oldest) seenMessageIds.delete(oldest);
+            }
+        }
+
+        function isDuplicateMessage(messageId) {
+            if (!messageId) return false;
+            if (seenMessageIds.has(messageId)) return true;
+            rememberSeenMessageId(messageId);
+            return false;
+        }
+
+        function ensurePayloadMessageId(payload) {
+            if (payload.msgId) return payload;
+            return {
+                ...payload,
+                msgId: `${myPeerId}:${Date.now()}:${++outgoingMessageSeq}`
+            };
+        }
+
+        function sendRealtimePayload(payload) {
+            if (!webxdcRealtimeChannel) return;
+            try {
+                const json = JSON.stringify(payload);
+                const bytes = new TextEncoder().encode(json);
+                webxdcRealtimeChannel.send(bytes);
+                debugLog('REALTIME_SEND_OK', {
+                    action: payload.action || null,
+                    msgId: payload.msgId || null,
+                    bytes: bytes.length
+                });
+            } catch (err) {
+                debugLog('REALTIME_SEND_ERROR', {
+                    action: payload.action || null,
+                    message: err && err.message ? err.message : String(err)
+                });
+            }
+        }
+
+        function parseRealtimePayload(packet) {
+            try {
+                if (packet instanceof Uint8Array) {
+                    const json = new TextDecoder().decode(packet);
+                    return JSON.parse(json);
+                }
+                if (typeof packet === 'string') {
+                    return JSON.parse(packet);
+                }
+                if (packet && typeof packet === 'object') {
+                    return packet;
+                }
+                return null;
+            } catch (err) {
+                debugLog('REALTIME_PARSE_ERROR', { message: err && err.message ? err.message : String(err) });
+                return null;
+            }
+        }
+
+        function startRealtimeChannel() {
+            if (!window.webxdc) return;
+            if (typeof window.webxdc.joinRealtimeChannel !== 'function') {
+                debugLog('REALTIME_UNSUPPORTED', {});
+                return;
+            }
+
+            try {
+                webxdcRealtimeChannel = window.webxdc.joinRealtimeChannel();
+            } catch (err) {
+                try {
+                    window.parent.__gomokuRealtimeChannel?.leave?.();
+                } catch (_) {}
+                webxdcRealtimeChannel = window.webxdc.joinRealtimeChannel();
+            }
+
+            window.parent.__gomokuRealtimeChannel = webxdcRealtimeChannel;
+            debugLog('REALTIME_CHANNEL_READY', {});
+
+            webxdcRealtimeChannel.setListener((packet) => {
+                debugLog('REALTIME_RAW', {
+                    type: packet instanceof Uint8Array ? 'Uint8Array' : typeof packet,
+                    size: packet instanceof Uint8Array ? packet.length : null
+                });
+                const payload = parseRealtimePayload(packet);
+                if (!payload) return;
+                handleIncomingPayload(payload, { source: 'realtime', isLive: true, raw: null });
+            });
+        }
+
+        function handleIncomingPayload(payload, meta = {}) {
+            if (!payload) {
+                debugLog('UPDATE_SKIPPED', { reason: 'missing payload', source: meta.source || 'unknown' });
+                return;
+            }
+            if (isDuplicateMessage(payload.msgId)) {
+                debugLog('UPDATE_DUPLICATE_SKIPPED', { msgId: payload.msgId, source: meta.source || 'unknown' });
+                return;
+            }
+
+            const rawUpdate = meta.raw || {};
+            const senderAddr = getUpdateAddr(rawUpdate, payload);
+            const senderPeerId = getUpdatePeerId(rawUpdate, payload);
+            const isNewPeer = senderPeerId && senderPeerId !== myPeerId && !connectedPlayers[senderPeerId];
+            const senderName = getUpdateName(rawUpdate, payload);
+            const isLive = meta.isLive !== undefined
+                ? meta.isLive
+                : (meta.maxSerial === undefined || meta.serial === meta.maxSerial);
+
+            if ((senderAddr && senderAddr !== myAddr) || (senderPeerId && senderPeerId !== myPeerId)) {
+                remoteUpdateSeen = true;
+            }
+
+            debugLog('UPDATE_PARSED', {
+                source: meta.source || 'unknown',
+                action: payload.action || null,
+                serial: meta.serial,
+                maxSerial: meta.maxSerial,
+                senderPeerId,
+                senderAddr,
+                senderName,
+                isNewPeer,
+                isLive,
+                msgId: payload.msgId || null,
+                rawSender: rawUpdate.sender || null,
+                rawFrom: rawUpdate.from || null,
+                rawAuthor: rawUpdate.author || null,
+                rawUnderscoreSender: rawUpdate._sender || null
+            });
+
+            if (senderPeerId) {
+                rememberConnectedPlayer(senderPeerId, senderName, senderAddr);
+            }
+
+            if (isLive && isNewPeer && payload.action !== 'PRESENCE') {
+                debugLog('PRESENCE_REPLY_TRIGGERED', {
+                    reason: 'new live peer update',
+                    action: payload.action || null,
+                    senderPeerId
+                });
+                announcePresence('PRESENCE');
+                broadcastStateSync('new-peer-detected');
+            }
+
+            if (payload.action === 'NOTIFY') {
+                addNotification(payload.noteText, {
+                    id: payload.noteId,
+                    at: payload.noteAt,
+                    broadcast: false
+                });
+                return;
+            }
+
+            if (payload.action === 'LEAVE') {
+                applyPeerLeft(payload.leftPeerId, 'remote-update', payload.leaveEventId, payload.noteText);
+                return;
+            }
+
+            if (payload.action === 'JOIN' || payload.action === 'PRESENCE') return;
+
+            if (gameModeSelect.value !== 'webxdc') return;
+
+            if (payload.action === 'STATE') {
+                applyStatePayload(payload, meta);
+            } else if (payload.action === 'MOVE') {
+                if (!isOnBoard(payload.r, payload.c) || !board.length) return;
+
+                if (!networkPlayers[payload.player] && senderPeerId) {
+                    networkPlayers[payload.player] = senderPeerId;
+                    if (payload.player === 1) p1NameInput.value = senderName + " (Black)";
+                    if (payload.player === 2) p2NameInput.value = senderName + " (White)";
+                    maybeAnnounceGameStart('remote-move-claim');
+                }
+
+                if (board[payload.r][payload.c] === payload.player) return;
+
+                currentPlayer = payload.player;
+                applyPieceLocally(payload.r, payload.c);
+            } else if (payload.action === 'WITHDRAWAL') {
+                applyWithdrawalResult(payload.quitterPeerId, payload.winnerPeerId, 'remote-update');
+            } else if (payload.action === 'RESET') {
+                initBoard(false);
+            }
+        }
+
+        function sendXdcUpdate(payload, infoText = '', summaryText = '') {
+            if (!window.webxdc) return;
+            const payloadWithMessageId = ensurePayloadMessageId(payload);
+            rememberSeenMessageId(payloadWithMessageId.msgId);
+            sendRealtimePayload(payloadWithMessageId);
+
+            const summary = summaryText || infoText || 'Gomoku update';
+            const update = { payload: payloadWithMessageId, summary: summary };
+            if (infoText) update.info = infoText;
+
+            try {
+                const maybePromise = window.webxdc.sendUpdate(update, summary);
+                if (maybePromise && typeof maybePromise.then === 'function') {
+                    maybePromise
+                        .then(() => debugLog('SEND_UPDATE_OK', { action: payloadWithMessageId.action || null, summary }))
+                        .catch((err) => debugLog('SEND_UPDATE_ERROR', {
+                            action: payloadWithMessageId.action || null,
+                            message: err && err.message ? err.message : String(err)
+                        }));
+                } else {
+                    debugLog('SEND_UPDATE_OK', { action: payloadWithMessageId.action || null, summary });
+                }
+            } catch (err) {
+                debugLog('SEND_UPDATE_ERROR', {
+                    action: payloadWithMessageId.action || null,
+                    message: err && err.message ? err.message : String(err)
+                });
+            }
+        }
+
+        function displayNameForPeer(peerId) {
+            if (!peerId) return 'Unknown player';
+            const rawName = connectedPlayers[peerId]?.name;
+            if (typeof rawName === 'string' && rawName.trim()) return rawName.trim();
+            if (peerId === myPeerId && myName) return myName;
+            return `Player ${peerId.slice(0, 8)}`;
+        }
+
+        function ensurePlayerScoreEntry(peerId) {
+            if (!peerId) return;
+            if (!Number.isInteger(playerScoresByPeer[peerId])) {
+                playerScoresByPeer[peerId] = 0;
+            }
+        }
+
+        function updateAllPlayersScoreboard() {
+            if (!allPlayersScoreboard) return;
+
+            const peerIds = new Set([
+                ...Object.keys(playerScoresByPeer),
+                ...Object.keys(connectedPlayers),
+                myPeerId
+            ]);
+
+            const rows = Array.from(peerIds)
+                .filter(Boolean)
+                .map((peerId) => {
+                    ensurePlayerScoreEntry(peerId);
+                    return {
+                        peerId,
+                        name: displayNameForPeer(peerId),
+                        score: playerScoresByPeer[peerId] || 0
+                    };
+                })
+                .sort((a, b) => {
+                    if (b.score !== a.score) return b.score - a.score;
+                    return a.name.localeCompare(b.name);
+                });
+
+            allPlayersScoreboard.innerHTML = '';
+            const title = document.createElement('h3');
+            title.textContent = 'Players Scoreboard';
+            allPlayersScoreboard.appendChild(title);
+
+            const entries = rows.length
+                ? rows
+                : [{ name: 'No players yet', score: 0 }];
+
+            for (const row of entries) {
+                const scoreRow = document.createElement('div');
+                scoreRow.className = 'score-row';
+
+                const nameEl = document.createElement('span');
+                nameEl.className = 'score-name';
+                nameEl.textContent = row.name;
+
+                const scoreEl = document.createElement('span');
+                scoreEl.className = 'score-value';
+                scoreEl.textContent = String(row.score);
+
+                scoreRow.appendChild(nameEl);
+                scoreRow.appendChild(scoreEl);
+                allPlayersScoreboard.appendChild(scoreRow);
+            }
+        }
+
+        function rememberConnectedPlayer(peerId, name, addr = null) {
+            if (!peerId) {
+                debugLog('CONNECTED_PLAYER_SKIPPED', { reason: 'missing peerId', name: name || null, addr: addr || null });
+                return;
+            }
+            const wasKnown = !!connectedPlayers[peerId];
+            if (!wasKnown) knownLeftPeers.delete(peerId);
+            connectedPlayers[peerId] = {
+                addr: addr || null,
                 name: name || 'Player',
                 lastSeen: Date.now()
             };
+            ensurePlayerScoreEntry(peerId);
+            debugLog('CONNECTED_PLAYER_RECORDED', {
+                peerId,
+                addr: addr || null,
+                name: name || 'Player',
+                wasKnown,
+                totalConnected: Object.keys(connectedPlayers).length
+            });
             updateConnectionIndicator();
+            updateAllPlayersScoreboard();
+        }
+
+        function normalizeAddr(addr) {
+            if (typeof addr === 'string' && addr.trim()) return addr.trim();
+
+            if (addr && typeof addr === 'object') {
+                const candidateKeys = ['addr', 'address', 'email', 'id', '_sender'];
+                for (const key of candidateKeys) {
+                    const value = addr[key];
+                    if (typeof value === 'string' && value.trim()) return value.trim();
+                }
+            }
+
+            return null;
+        }
+
+        function getUpdatePeerId(update, payload) {
+            const candidates = [
+                payload?.peerId,
+                payload?.sessionId,
+                update?.sender?.peerId
+            ];
+            for (const candidate of candidates) {
+                const normalized = normalizeAddr(candidate);
+                if (normalized) return normalized;
+            }
+            return getUpdateAddr(update, payload);
+        }
+
+        function getUpdateName(update, payload) {
+            const candidates = [
+                payload?.name,
+                update?.sender?.name,
+                update?.senderName,
+                update?.fromName,
+                update?.authorName
+            ];
+            for (const candidate of candidates) {
+                if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+            }
+            return 'Player';
+        }
+
+        function getUpdateAddr(update, payload) {
+            const candidates = [
+                payload?.addr,
+                update?._sender,
+                update?.sender?.addr,
+                update?.sender?.address,
+                update?.sender,
+                update?.from?.addr,
+                update?.from,
+                update?.author?.addr,
+                update?.author
+            ];
+            for (const candidate of candidates) {
+                const normalized = normalizeAddr(candidate);
+                if (normalized) return normalized;
+            }
+            return null;
         }
 
         function updateConnectionIndicator() {
             const count = Object.keys(connectedPlayers).length;
-
-            if (gameModeSelect.value === 'webxdc') {
-                connectionIndicator.style.display = 'block';
-                connectionIndicator.innerHTML = `WebXDC Players Connected: <strong>${count}</strong>`;
-            } else {
-                connectionIndicator.style.display = 'none';
-            }
+            debugLog('CONNECTION_INDICATOR_UPDATE', {
+                gameMode: gameModeSelect.value,
+                count,
+                peerIds: Object.keys(connectedPlayers)
+            });
         }
 
-        function announcePresence() {
+        // 'JOIN' announces us to the chat. 'PRESENCE' is the quiet reply an existing
+        // player sends back to a newcomer, so discovery works in both directions.
+        function announcePresence(action = 'JOIN') {
             if (!window.webxdc || gameModeSelect.value !== 'webxdc') return;
 
-            rememberConnectedPlayer(myAddr, myName);
+            rememberConnectedPlayer(myPeerId, myName, myAddr);
 
-            window.webxdc.sendUpdate({
-                payload: {
-                    action: 'JOIN',
-                    addr: myAddr,
-                    name: myName
-                },
-                info: `${myName} joined the Gomoku game.`
-            }, `${myName} joined the Gomoku game.`);
+            const update = { payload: { action: action, addr: myAddr, name: myName, peerId: myPeerId } };
+            let info = '';
+            let summary = `${myName} is online in Gomoku.`;
+            if (action === 'JOIN') {
+                info = `${myName} joined the Gomoku game.`;
+                summary = `${myName} joined the Gomoku game.`;
+                addNotification(`${myName} joined the game.`, {
+                    id: `join:${myPeerId}:${Date.now()}`,
+                    at: Date.now(),
+                    broadcast: true
+                });
+            }
+            debugLog('PRESENCE_ANNOUNCE', {
+                action,
+                peerId: myPeerId,
+                addr: myAddr,
+                name: myName
+            });
+            sendXdcUpdate(update.payload, info, summary);
         }
 
         // WebXDC Listener: Receives moves from chat
         if (window.webxdc) {
+            debugLog('SET_UPDATE_LISTENER_REGISTER', {});
             window.webxdc.setUpdateListener(function(update) {
-                const payload = update.payload;
-                
-                if (gameModeSelect.value !== 'webxdc') return Promise.resolve();
-
-                if (payload.addr) {
-                    rememberConnectedPlayer(payload.addr, payload.name);
-                }
-
-                if (payload.action === 'JOIN') {
-                    rememberConnectedPlayer(payload.addr, payload.name);
-                } else if (payload.action === 'MOVE') {
-                    // Claim player slot if not claimed yet
-                    if (!networkPlayers[payload.player]) {
-                        networkPlayers[payload.player] = payload.addr;
-                        if (payload.player === 1) p1NameInput.value = payload.name + " (Black)";
-                        if (payload.player === 2) p2NameInput.value = payload.name + " (White)";
-                    }
-                    
-                    // Optimistic UI check: If our board already has this piece, skip it.
-                    if (board[payload.r][payload.c] === payload.player) {
-                        return Promise.resolve();
-                    }
-
-                    // Otherwise apply the move locally
-                    currentPlayer = payload.player;
-                    applyPieceLocally(payload.r, payload.c);
-                } else if (payload.action === 'RESET') {
-                    initBoard(false); 
+                debugLog('UPDATE_LISTENER_RAW', {
+                    hasPayload: !!update?.payload,
+                    serial: update?.serial,
+                    maxSerial: update?.max_serial,
+                    sender: update?.sender || null,
+                    from: update?.from || null,
+                    author: update?.author || null,
+                    underscoreSender: update?._sender || null
+                });
+                try {
+                    handleUpdate(update);
+                } catch (err) {
+                    // One malformed update must not abort the rest of the replay.
+                    console.error('Gomoku: could not apply update', err);
+                    debugLog('HANDLE_UPDATE_ERROR', { message: err && err.message ? err.message : String(err) });
                 }
 
                 // Resolving promise required by newer WebXDC APIs
                 return Promise.resolve();
             }, 0);
+            debugLog('SET_UPDATE_LISTENER_READY', {});
+        }
+
+        function isOnBoard(r, c) {
+            return Number.isInteger(r) && r >= 0 && r < boardSize
+                && Number.isInteger(c) && c >= 0 && c < boardSize;
+        }
+
+        function countMoves(boardState) {
+            if (!Array.isArray(boardState)) return 0;
+            let count = 0;
+            for (const row of boardState) {
+                if (!Array.isArray(row)) continue;
+                for (const cell of row) {
+                    if (cell === 1 || cell === 2) count++;
+                }
+            }
+            return count;
+        }
+
+        function renderBoardFromState() {
+            document.querySelectorAll('.cell .piece').forEach((piece) => piece.remove());
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    const player = board?.[r]?.[c];
+                    if (player !== 1 && player !== 2) continue;
+                    const piece = document.createElement('div');
+                    piece.classList.add('piece', player === 1 ? 'black' : 'white');
+                    const cell = document.querySelector(`.cell[data-row="${r}"][data-col="${c}"]`);
+                    if (cell) cell.appendChild(piece);
+                }
+            }
+        }
+
+        function buildStatePayload() {
+            return {
+                action: 'STATE',
+                addr: myAddr,
+                name: myName,
+                peerId: myPeerId,
+                state: {
+                    board: board.map((row) => row.slice()),
+                    currentPlayer,
+                    networkPlayers: { 1: networkPlayers[1], 2: networkPlayers[2] },
+                    p1Name: p1NameInput.value,
+                    p2Name: p2NameInput.value,
+                    scores: { 1: scores[1], 2: scores[2] },
+                    playerScores: { ...playerScoresByPeer },
+                    notifications: notifications.map((entry) => ({ id: entry.id, at: entry.at, text: entry.text })),
+                    gameStartAnnounced,
+                    gameOver,
+                    moveCount: countMoves(board)
+                }
+            };
+        }
+
+        function applyStatePayload(payload, meta = {}) {
+            const state = payload?.state;
+            if (!state || !Array.isArray(state.board) || state.board.length !== boardSize) {
+                debugLog('STATE_SKIPPED', { reason: 'invalid-board-shape', source: meta.source || 'unknown' });
+                return;
+            }
+
+            const normalizedBoard = state.board.map((row) =>
+                Array.isArray(row) && row.length === boardSize
+                    ? row.map((v) => (v === 1 || v === 2 ? v : 0))
+                    : Array(boardSize).fill(0)
+            );
+            const incomingMoveCount = Number.isInteger(state.moveCount) ? state.moveCount : countMoves(normalizedBoard);
+            const localMoveCount = countMoves(board);
+            if (incomingMoveCount < localMoveCount) {
+                debugLog('STATE_SKIPPED', {
+                    reason: 'older-than-local',
+                    incomingMoveCount,
+                    localMoveCount,
+                    source: meta.source || 'unknown'
+                });
+                return;
+            }
+
+            board = normalizedBoard;
+            currentPlayer = state.currentPlayer === 2 ? 2 : 1;
+            gameOver = !!state.gameOver;
+            networkPlayers = {
+                1: typeof state.networkPlayers?.[1] === 'string' ? state.networkPlayers[1] : null,
+                2: typeof state.networkPlayers?.[2] === 'string' ? state.networkPlayers[2] : null
+            };
+
+            if (typeof state.p1Name === 'string' && state.p1Name.trim()) p1NameInput.value = state.p1Name;
+            if (typeof state.p2Name === 'string' && state.p2Name.trim()) p2NameInput.value = state.p2Name;
+
+            if (Number.isInteger(state.scores?.[1]) && Number.isInteger(state.scores?.[2])) {
+                scores[1] = state.scores[1];
+                scores[2] = state.scores[2];
+            }
+            if (state.playerScores && typeof state.playerScores === 'object') {
+                const nextScores = {};
+                for (const [peerId, rawValue] of Object.entries(state.playerScores)) {
+                    if (!peerId) continue;
+                    const scoreValue = Number.isInteger(rawValue) ? rawValue : 0;
+                    nextScores[peerId] = scoreValue;
+                }
+                playerScoresByPeer = nextScores;
+            }
+            if (Array.isArray(state.notifications)) {
+                for (const note of state.notifications) {
+                    if (!note || typeof note.text !== 'string') continue;
+                    addNotification(note.text, {
+                        id: note.id,
+                        at: note.at,
+                        broadcast: false
+                    });
+                }
+            }
+            if (typeof state.gameStartAnnounced === 'boolean') {
+                gameStartAnnounced = state.gameStartAnnounced;
+            }
+
+            renderBoardFromState();
+            updateTurnIndicator();
+            updateConnectionIndicator();
+            updateAllPlayersScoreboard();
+            debugLog('STATE_APPLIED', {
+                source: meta.source || 'unknown',
+                incomingMoveCount,
+                localMoveCountBefore: localMoveCount
+            });
+        }
+
+        function broadcastStateSync(reason) {
+            if (!window.webxdc || gameModeSelect.value !== 'webxdc' || !board?.length) return;
+            const payload = buildStatePayload();
+            sendXdcUpdate(payload, '', `Gomoku state sync (${reason})`);
+            debugLog('STATE_SYNC_SENT', { reason, moveCount: payload.state.moveCount });
+        }
+
+        function handleUpdate(update) {
+            handleIncomingPayload(update.payload, {
+                source: 'update',
+                serial: update.serial,
+                maxSerial: update.max_serial,
+                raw: update
+            });
         }
 
         gameModeSelect.addEventListener('change', (e) => {
+            debugLog('GAME_MODE_CHANGED', { mode: e.target.value });
             if (e.target.value === 'pve') {
                 p2NameInput.value = "Computer (White)";
                 p1NameInput.value = "Player 1 (Black)";
@@ -252,7 +1274,9 @@
 
             if (gameModeSelect.value === 'webxdc') {
                 networkPlayers = { 1: null, 2: null };
-                rememberConnectedPlayer(myAddr, myName);
+                myAssignedPlayer = null;
+                gameStartAnnounced = false;
+                rememberConnectedPlayer(myPeerId, myName, myAddr);
                 if(p1NameInput.value.includes("Waiting")) p1NameInput.value = "Waiting for P1 (Black)";
                 if(p2NameInput.value.includes("Waiting")) p2NameInput.value = "Waiting for P2 (White)";
             }
@@ -271,10 +1295,12 @@
             updateConnectionIndicator();
 
             if (sendNetworkUpdate && window.webxdc && gameModeSelect.value === 'webxdc') {
-                window.webxdc.sendUpdate({
-                    payload: { action: 'RESET', addr: myAddr, name: myName },
-                    info: `${myName} reset the game board.`
-                }, `${myName} reset the game board.`);
+                sendXdcUpdate(
+                    { action: 'RESET', addr: myAddr, name: myName, peerId: myPeerId },
+                    `${myName} reset the game board.`,
+                    `${myName} reset the game board.`
+                );
+                broadcastStateSync('reset');
             }
         }
 
@@ -291,20 +1317,54 @@
             if (isNaN(r) || isNaN(c) || board[r][c] !== 0) return; 
 
             if (gameModeSelect.value === 'webxdc') {
-                const activeAddr = networkPlayers[currentPlayer];
-                if (activeAddr && activeAddr !== myAddr) {
+                const p1Owner = networkPlayers[1];
+                const p2Owner = networkPlayers[2];
+                const bothPlayersAssigned = !!p1Owner && !!p2Owner;
+                const iAmSpectator = bothPlayersAssigned && p1Owner !== myPeerId && p2Owner !== myPeerId;
+                if (iAmSpectator) {
+                    alert("Game already in progress between Player 1 and Player 2. You joined as a spectator.");
+                    debugLog('MOVE_BLOCKED', {
+                        reason: 'spectator-joined-active-game',
+                        myPeerId,
+                        p1Owner,
+                        p2Owner
+                    });
+                    return;
+                }
+
+                const activePeerId = networkPlayers[currentPlayer];
+                if (activePeerId && activePeerId !== myPeerId) {
                     alert("It is not your turn!");
+                    debugLog('MOVE_BLOCKED', { reason: 'turn-owned-by-other-peer', currentPlayer, activePeerId, myPeerId });
                     return;
                 }
                 
                 // Track who made the move before it flips in applyPieceLocally
                 let playedAs = currentPlayer;
 
+                if (!activePeerId && myAssignedPlayer && myAssignedPlayer !== playedAs) {
+                    alert(`Waiting for opponent to move as ${playedAs === 1 ? 'Black' : 'White'}.`);
+                    debugLog('MOVE_BLOCKED', {
+                        reason: 'opponent-slot-not-claimed-yet',
+                        myAssignedPlayer,
+                        attemptedPlayer: playedAs,
+                        networkPlayers
+                    });
+                    return;
+                }
+
                 // Optimistic UI: Claim slot locally immediately to prevent double clicking
                 if (!networkPlayers[playedAs]) {
-                    networkPlayers[playedAs] = myAddr;
+                    networkPlayers[playedAs] = myPeerId;
+                    if (!myAssignedPlayer) myAssignedPlayer = playedAs;
                     if (playedAs === 1) p1NameInput.value = myName + " (Black)";
                     if (playedAs === 2) p2NameInput.value = myName + " (White)";
+                    debugLog('PLAYER_SLOT_CLAIMED_LOCAL', {
+                        playedAs,
+                        myAssignedPlayer,
+                        networkPlayers
+                    });
+                    maybeAnnounceGameStart('local-move-claim');
                 }
 
                 // Optimistic UI: Apply it immediately to the local board
@@ -312,10 +1372,12 @@
 
                 // Broadcast it silently to the chat network
                 if (window.webxdc) {
-                    window.webxdc.sendUpdate({
-                        payload: { action: 'MOVE', r: r, c: c, player: playedAs, addr: myAddr, name: myName },
-                        info: `${myName} placed a piece.`
-                    }, `Gomoku: ${myName} made a move!`);
+                    sendXdcUpdate(
+                        { action: 'MOVE', r: r, c: c, player: playedAs, addr: myAddr, name: myName, peerId: myPeerId },
+                        `${myName} placed a piece.`,
+                        `Gomoku: ${myName} made a move!`
+                    );
+                    broadcastStateSync('move');
                 }
                 return; 
             }
@@ -411,15 +1473,28 @@
             turnIndicator.innerHTML = `🎉 <strong>${winnerName} Wins!</strong> 🎉`;
             turnIndicator.style.color = '#f1c40f';
             scores[player]++;
-            p1ScoreEl.innerText = scores[1];
-            p2ScoreEl.innerText = scores[2];
+            const winnerPeerId = networkPlayers[player];
+            if (winnerPeerId) {
+                ensurePlayerScoreEntry(winnerPeerId);
+                playerScoresByPeer[winnerPeerId]++;
+            }
+            updateAllPlayersScoreboard();
+            addNotification(
+                `Game ended: ${winnerName} won.`,
+                {
+                    id: `game-end:${winnerPeerId || 'unknown'}:${countMoves(board)}`,
+                    at: Date.now(),
+                    broadcast: gameModeSelect.value === 'webxdc' && winnerPeerId === myPeerId
+                }
+            );
             startFireworks();
 
-            if (gameModeSelect.value === 'webxdc' && window.webxdc && networkPlayers[player] === myAddr) {
-                 window.webxdc.sendUpdate({
-                    payload: { action: 'WIN' },
-                    info: `${myName} won the game!`
-                }, `Gomoku: ${myName} won the game!`);
+            if (gameModeSelect.value === 'webxdc' && window.webxdc && networkPlayers[player] === myPeerId) {
+                 sendXdcUpdate(
+                    { action: 'WIN' },
+                    `${myName} won the game!`,
+                    `Gomoku: ${myName} won the game!`
+                );
             }
         }
 
@@ -427,7 +1502,14 @@
             let name = currentPlayer === 1 ? p1NameInput.value : p2NameInput.value;
             const color = currentPlayer === 1 ? '(Black)' : '(White)';
             
-            if (gameModeSelect.value === 'webxdc' && networkPlayers[currentPlayer] === myAddr) {
+            if (
+                gameModeSelect.value === 'webxdc'
+                && myAssignedPlayer
+                && currentPlayer !== myAssignedPlayer
+                && !networkPlayers[currentPlayer]
+            ) {
+                turnIndicator.innerHTML = `Current Turn: Waiting for ${color} player to join/move`;
+            } else if (gameModeSelect.value === 'webxdc' && networkPlayers[currentPlayer] === myPeerId) {
                 turnIndicator.innerHTML = `Current Turn: <strong>You</strong> ${color}`;
             } else {
                 turnIndicator.innerHTML = `Current Turn: ${name.replace(/\(.*\)/, '')} ${color}`;
@@ -438,7 +1520,60 @@
         p1NameInput.addEventListener('input', updateTurnIndicator);
         p2NameInput.addEventListener('input', updateTurnIndicator);
         resetBtn.addEventListener('click', () => initBoard(true));
-
+        menuActionsSelect.addEventListener('change', (e) => {
+            if (e.target.value === 'debug-logs') showDebugPanel();
+            if (e.target.value === 'notifications') showNotificationsPanel();
+            e.target.value = '';
+        });
+        debugSearchInput.addEventListener('input', (e) => {
+            debugSearchQuery = e.target.value || '';
+            renderDebugLog();
+        });
+        debugCloseBtn.addEventListener('click', hideDebugPanel);
+        debugClearBtn.addEventListener('click', () => {
+            debugEntries.length = 0;
+            debugLog('DEBUG_LOG_CLEARED', {});
+        });
+        notificationsClearBtn.addEventListener('click', () => {
+            notifications.length = 0;
+            notificationIds.clear();
+            renderNotifications();
+            debugLog('NOTIFICATIONS_CLEARED', {});
+        });
+        debugPanelHeader.addEventListener('pointerdown', (e) => {
+            if (!debugPopup.classList.contains('visible')) return;
+            if (e.target.closest('button')) return;
+            const rect = debugPopup.getBoundingClientRect();
+            debugDragState = {
+                pointerId: e.pointerId,
+                offsetX: e.clientX - rect.left,
+                offsetY: e.clientY - rect.top
+            };
+            debugPanelHeader.setPointerCapture(e.pointerId);
+            e.preventDefault();
+        });
+        debugPanelHeader.addEventListener('pointermove', (e) => {
+            if (!debugDragState || debugDragState.pointerId !== e.pointerId) return;
+            const rect = debugPopup.getBoundingClientRect();
+            const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+            const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+            const nextLeft = Math.min(maxLeft, Math.max(8, e.clientX - debugDragState.offsetX));
+            const nextTop = Math.min(maxTop, Math.max(8, e.clientY - debugDragState.offsetY));
+            debugPopup.style.left = `${nextLeft}px`;
+            debugPopup.style.top = `${nextTop}px`;
+            debugPopup.style.right = 'auto';
+        });
+        debugPanelHeader.addEventListener('pointerup', (e) => {
+            if (debugDragState && debugDragState.pointerId === e.pointerId) {
+                debugPanelHeader.releasePointerCapture(e.pointerId);
+                debugDragState = null;
+            }
+        });
+        debugPanelHeader.addEventListener('pointercancel', (e) => {
+            if (debugDragState && debugDragState.pointerId === e.pointerId) {
+                debugDragState = null;
+            }
+        });
         // --- Fireworks Animation ---
         const canvas = document.getElementById('fireworksCanvas');
         const ctx = canvas.getContext('2d');
@@ -447,6 +1582,7 @@
 
         function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
         window.addEventListener('resize', resizeCanvas);
+        window.addEventListener('resize', clampDebugPopupToViewport);
         resizeCanvas();
 
         class Particle {
@@ -490,6 +1626,24 @@
         }
 
         // Boot
+        const chatInstanceInfo = getChatInstanceInfo();
+        debugLog('APP_BOOT', { appVersion, myPeerId, myAddr, myName });
+        debugLog('CHAT_INSTANCE_INFO', chatInstanceInfo);
+        ensurePlayerScoreEntry(myPeerId);
+        updateAllPlayersScoreboard();
+        renderNotifications();
+        showNotificationsPanel();
+        startRealtimeChannel();
+        startPresenceSync();
+        startPlayerExitMonitor();
+        setTimeout(() => {
+            if (gameModeSelect.value !== 'webxdc') return;
+            if (!remoteUpdateSeen && Object.keys(connectedPlayers).length <= 1) {
+                debugLog('NO_REMOTE_UPDATES_HINT', {
+                    message: 'No inbound updates seen after startup. Most common cause: peers are not running the same shared .xdc message instance in chat.'
+                });
+            }
+        }, 30000);
         if (gameModeSelect.value === 'webxdc') {
             p1NameInput.value = "Waiting for P1 (Black)";
             p2NameInput.value = "Waiting for P2 (White)";

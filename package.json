@@ -1,17 +1,19 @@
 {
   "name": "gomoku-webxdc",
-  "version": "0.0.2",
+  "version": "0.1.31",
   "description": "Gomoku game packaged for WebXDC",
   "main": "index.html",
   "scripts": {
-    "build": "bestzip dist/gomoku.xdc manifest.toml index.html gomoku.png"
+    "sync-version": "node -e \"const fs=require('fs');const v=require('./package.json').version;fs.writeFileSync('version.js', 'window.GOMOKU_APP_VERSION = ' + JSON.stringify(v) + ';\\\\n');\"",
+    "build": "npm version patch --no-git-tag-version && npm run sync-version && npm run build:xdc",
+    "build:xdc": "npm run sync-version && bestzip dist/gomoku-$(node -p \"require('./package.json').version\").xdc manifest.toml index.html gomoku.png version.js"
   },
   "keywords": [
     "webxdc",
     "gomoku",
     "game"
   ],
-  "author": "",
+  "author": "th2tran",
   "license": "MIT",
   "devDependencies": {
     "bestzip": "^2.2.1"

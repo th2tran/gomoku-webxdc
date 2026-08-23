@@ -371,7 +371,9 @@
         const maxDebugEntries = 200;
         const notifications = [];
         const notificationIds = new Set();
+        const notificationDedupeAtByKey = new Map();
         const maxNotifications = 200;
+        const recentJoinAtByIdentity = new Map();
         let debugSearchQuery = '';
         let presenceSyncTimer = null;
         let playerExitMonitorTimer = null;
@@ -383,6 +385,7 @@
         const seenMessageIds = new Set();
         const seenMessageIdQueue = [];
         const maxSeenMessageIds = 500;
+        const joinNotificationKeys = new Set();
         let gameStartAnnounced = false;
         const playerStaleMs = 45000;
         const knownLeftPeers = new Set();
@@ -500,6 +503,14 @@
         function addNotification(text, options = {}) {
             if (typeof text !== 'string' || !text.trim()) return;
             const noteText = text.trim();
+            const dedupeKey = typeof options.dedupeKey === 'string' ? options.dedupeKey : null;
+            const dedupeWindowMs = Number.isFinite(options.dedupeWindowMs) ? options.dedupeWindowMs : 0;
+            const now = Date.now();
+            if (dedupeKey && dedupeWindowMs > 0) {
+                const lastAt = notificationDedupeAtByKey.get(dedupeKey);
+                if (Number.isFinite(lastAt) && now - lastAt < dedupeWindowMs) return;
+                notificationDedupeAtByKey.set(dedupeKey, now);
+            }
             const noteId = options.id || `note:${myPeerId}:${Date.now()}:${++notificationSeq}`;
             if (notificationIds.has(noteId)) return;
 
@@ -931,7 +942,10 @@
             knownLeftPeers.add(peerId);
 
             const leaverName = displayNameForPeer(peerId);
+            const leaverAddr = connectedPlayers[peerId]?.addr || null;
             delete connectedPlayers[peerId];
+            joinNotificationKeys.delete(`peer:${peerId}`);
+            if (leaverAddr) joinNotificationKeys.delete(`addr:${leaverAddr}`);
             updateConnectionIndicator();
             updateAllPlayersScoreboard();
 
@@ -1147,14 +1161,28 @@
 
             const rawUpdate = meta.raw || {};
             const senderAddr = getUpdateAddr(rawUpdate, payload);
-            const senderPeerId = getUpdatePeerId(rawUpdate, payload);
-            const isNewPeer = senderPeerId && senderPeerId !== myPeerId && !connectedPlayers[senderPeerId];
+            let senderPeerId = getUpdatePeerId(rawUpdate, payload);
+            const knownPeerIdByAddr = findKnownPeerIdByAddr(senderAddr);
+            if (senderPeerId && !connectedPlayers[senderPeerId] && knownPeerIdByAddr) {
+                senderPeerId = knownPeerIdByAddr;
+            }
+            const isSelfSender = (senderPeerId && senderPeerId === myPeerId) || (senderAddr && senderAddr === myAddr);
+            const isKnownSender = (senderPeerId && !!connectedPlayers[senderPeerId]) || !!knownPeerIdByAddr;
+            const isNewPeer = !!senderPeerId && !isSelfSender && !isKnownSender;
             const senderName = getUpdateName(rawUpdate, payload);
+            const joinKeys = [];
+            if (senderPeerId) joinKeys.push(`peer:${senderPeerId}`);
+            if (knownPeerIdByAddr) joinKeys.push(`peer:${knownPeerIdByAddr}`);
+            if (senderAddr) joinKeys.push(`addr:${senderAddr}`);
+            const alreadyNotifiedJoin = joinKeys.some((key) => joinNotificationKeys.has(key));
+            const joinIdentity = senderAddr || senderPeerId || cleanPlayerName(senderName).toLowerCase();
+            const recentJoinAt = recentJoinAtByIdentity.get(joinIdentity);
+            const isRecentJoinDuplicate = Number.isFinite(recentJoinAt) && (Date.now() - recentJoinAt) < 30000;
             const isLive = meta.isLive !== undefined
                 ? meta.isLive
                 : (meta.maxSerial === undefined || meta.serial === meta.maxSerial);
 
-            if ((senderAddr && senderAddr !== myAddr) || (senderPeerId && senderPeerId !== myPeerId)) {
+            if (!isSelfSender && ((senderAddr && senderAddr !== myAddr) || (senderPeerId && senderPeerId !== myPeerId))) {
                 remoteUpdateSeen = true;
             }
 
@@ -1178,12 +1206,17 @@
             if (senderPeerId) {
                 rememberConnectedPlayer(senderPeerId, senderName, senderAddr);
             }
-            if (isNewPeer) {
+            if (payload.action === 'JOIN' && isNewPeer && !alreadyNotifiedJoin && !isRecentJoinDuplicate) {
+                const joinDedupeSource = senderAddr || senderPeerId || cleanPlayerName(senderName).toLowerCase();
                 addNotification(`${cleanPlayerName(senderName)} joined the game.`, {
                     id: `join-detected:${senderPeerId}:${payload.msgId || Date.now()}`,
                     at: Date.now(),
+                    dedupeKey: `join:${joinDedupeSource}`,
+                    dedupeWindowMs: 10000,
                     broadcast: false
                 });
+                for (const key of joinKeys) joinNotificationKeys.add(key);
+                recentJoinAtByIdentity.set(joinIdentity, Date.now());
             }
 
             if (isLive && isNewPeer && payload.action !== 'PRESENCE') {
@@ -1456,6 +1489,15 @@
             return null;
         }
 
+        function findKnownPeerIdByAddr(addr) {
+            if (!addr) return null;
+            for (const [peerId, peerMeta] of Object.entries(connectedPlayers)) {
+                if (!peerId || !peerMeta) continue;
+                if (peerMeta.addr === addr) return peerId;
+            }
+            return null;
+        }
+
         function updateConnectionIndicator() {
             const count = Object.keys(connectedPlayers).length;
             debugLog('CONNECTION_INDICATOR_UPDATE', {
@@ -1478,11 +1520,6 @@
             if (action === 'JOIN') {
                 info = `${myName} joined the Gomoku game.`;
                 summary = `${myName} joined the Gomoku game.`;
-                addNotification(`${myName} joined the game.`, {
-                    id: `join:${myPeerId}:${Date.now()}`,
-                    at: Date.now(),
-                    broadcast: true
-                });
             }
             debugLog('PRESENCE_ANNOUNCE', {
                 action,

@@ -1961,6 +1961,20 @@
                 gameStartAnnounced = false;
                 rememberConnectedPlayer(myPeerId, myName, myAddr);
             }
+            if (gameModeSelect.value === 'pve') {
+                networkPlayers = { 1: null, 2: null };
+                myAssignedPlayer = null;
+                gameStartAnnounced = false;
+                p1NameInput.value = "Player 1 (Black)";
+                p2NameInput.value = "Computer (White)";
+                p1NameInput.disabled = false;
+                p2NameInput.disabled = true;
+            }
+            if (gameModeSelect.value === 'pvp') {
+                networkPlayers = { 1: null, 2: null };
+                myAssignedPlayer = null;
+                gameStartAnnounced = false;
+            }
 
             for (let r = 0; r < boardSize; r++) {
                 for (let c = 0; c < boardSize; c++) {
@@ -2228,7 +2242,10 @@
                 ? displayNameForPeer(activePeerId)
                 : (name || (currentPlayer === 1 ? 'Black' : 'White')).replace(/\(.*\)/, '').trim();
             
-            if (gameModeSelect.value === 'webxdc-tournament') {
+            if (gameModeSelect.value === 'pve') {
+                const localName = currentPlayer === 1 ? cleanPlayerName(p1NameInput.value) : 'Computer';
+                turnIndicator.innerHTML = `Current Turn: ${localName} ${color}`;
+            } else if (gameModeSelect.value === 'webxdc-tournament') {
                 const activePair = networkPlayers[1] && networkPlayers[2];
                 const localPlayerNumber = getLocalAssignedPlayerNumber();
                 const iAmPlaying = localPlayerNumber !== null;

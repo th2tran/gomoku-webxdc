@@ -394,6 +394,7 @@
         let turnDeadlineTs = null;
         let moveTimerInterval = null;
         let timeoutResolutionInFlight = false;
+        const tournamentPlayerAddrLock = new Map(); // addr → peerId: first device that claimed a tournament slot for that addr
         const tournamentState = {
             enabled: false,
             pairIndex: 0,
@@ -614,8 +615,27 @@
             debugLog('GAME_START_ANNOUNCED', { source, p1Owner, p2Owner });
         }
 
+        function getCanonicalPeerId(peerId, addr = null) {
+            const normalizedAddr = normalizeAddr(addr);
+            if (normalizedAddr) {
+                const existingPeerIdByAddr = findKnownPeerIdByAddr(normalizedAddr);
+                if (existingPeerIdByAddr) return existingPeerIdByAddr;
+                const sameAddrPeer = Object.keys(connectedPlayers).find((candidatePeerId) => {
+                    return connectedPlayers[candidatePeerId]?.addr && normalizeAddr(connectedPlayers[candidatePeerId].addr) === normalizedAddr;
+                });
+                if (sameAddrPeer) return sameAddrPeer;
+            }
+            if (peerId && connectedPlayers[peerId]) return peerId;
+            return peerId || null;
+        }
+
         function buildTournamentSchedule() {
-            const peers = [...new Set([myPeerId, ...Object.keys(connectedPlayers)])].filter(Boolean);
+            const peers = [...new Set([myPeerId, ...Object.keys(connectedPlayers)])]
+                .map((peerId) => {
+                    const record = peerId === myPeerId ? { addr: myAddr } : connectedPlayers[peerId];
+                    return getCanonicalPeerId(peerId, record?.addr || null);
+                })
+                .filter((peerId, index, arr) => peerId && arr.indexOf(peerId) === index);
             if (peers.length < 2) return [];
             const ordered = peers.slice().sort((a, b) => {
                 const aName = displayNameForPeer(a);
@@ -1308,6 +1328,22 @@
             } else if (payload.action === 'MOVE') {
                 if (!isOnBoard(payload.r, payload.c) || !board.length) return;
 
+                // In tournament mode, enforce addr-lock so only the first device per identity can play.
+                // Use the original payload.peerId (pre-canonicalization) so machine B is blocked even
+                // when senderPeerId has been remapped to machine A's canonical peerId.
+                const moveSenderAddrNorm = normalizeAddr(senderAddr);
+                if (moveSenderAddrNorm && gameModeSelect.value === 'webxdc-tournament') {
+                    const originalSenderPeerId = typeof payload.peerId === 'string' ? payload.peerId : senderPeerId;
+                    const lockedPeerId = tournamentPlayerAddrLock.get(moveSenderAddrNorm);
+                    if (lockedPeerId && lockedPeerId !== originalSenderPeerId) {
+                        debugLog('MOVE_IGNORED_ADDR_LOCK', { originalSenderPeerId, senderPeerId, lockedPeerId, moveSenderAddrNorm });
+                        return;
+                    }
+                    if (!lockedPeerId && originalSenderPeerId) {
+                        tournamentPlayerAddrLock.set(moveSenderAddrNorm, originalSenderPeerId);
+                    }
+                }
+
                 if (!networkPlayers[payload.player] && senderPeerId) {
                     networkPlayers[payload.player] = senderPeerId;
                     syncMyAssignedPlayer();
@@ -1378,6 +1414,18 @@
             const rawName = connectedPlayers[peerId]?.name;
             if (typeof rawName === 'string' && rawName.trim()) return rawName.trim();
             if (peerId === myPeerId && myName) return myName;
+            // Fallback: find name via same-addr canonical entry
+            const peerAddr = connectedPlayers[peerId]?.addr;
+            if (peerAddr) {
+                const normAddr = normalizeAddr(peerAddr);
+                if (normAddr) {
+                    const canonicalId = findKnownPeerIdByAddr(normAddr);
+                    if (canonicalId && canonicalId !== peerId) {
+                        const canonicalName = connectedPlayers[canonicalId]?.name;
+                        if (typeof canonicalName === 'string' && canonicalName.trim()) return canonicalName.trim();
+                    }
+                }
+            }
             return `Player ${peerId.slice(0, 8)}`;
         }
 
@@ -1448,18 +1496,51 @@
                 debugLog('CONNECTED_PLAYER_SKIPPED', { reason: 'missing peerId', name: name || null, addr: addr || null });
                 return;
             }
-            const wasKnown = !!connectedPlayers[peerId];
-            if (!wasKnown) knownLeftPeers.delete(peerId);
-            connectedPlayers[peerId] = {
-                addr: addr || null,
-                name: name || 'Player',
+
+            const normalizedAddr = normalizeAddr(addr);
+            const canonicalPeerId = getCanonicalPeerId(peerId, normalizedAddr);
+            if (!canonicalPeerId) {
+                debugLog('CONNECTED_PLAYER_SKIPPED', { reason: 'missing canonical peer', peerId, name: name || null, addr: normalizedAddr || null });
+                return;
+            }
+
+            const sameAddrPeer = normalizedAddr
+                ? Object.keys(connectedPlayers).find((candidatePeerId) => {
+                    return candidatePeerId !== canonicalPeerId && connectedPlayers[candidatePeerId]?.addr && normalizeAddr(connectedPlayers[candidatePeerId].addr) === normalizedAddr;
+                })
+                : null;
+
+            if (sameAddrPeer && connectedPlayers[sameAddrPeer]) {
+                const staleScore = playerScoresByPeer[sameAddrPeer] || 0;
+                if (staleScore > 0) {
+                    playerScoresByPeer[canonicalPeerId] = (playerScoresByPeer[canonicalPeerId] || 0) + staleScore;
+                }
+                delete playerScoresByPeer[sameAddrPeer];
+                delete connectedPlayers[sameAddrPeer];
+            }
+            if (peerId !== canonicalPeerId && connectedPlayers[peerId]) {
+                const staleScore = playerScoresByPeer[peerId] || 0;
+                if (staleScore > 0) {
+                    playerScoresByPeer[canonicalPeerId] = (playerScoresByPeer[canonicalPeerId] || 0) + staleScore;
+                }
+                delete playerScoresByPeer[peerId];
+                delete connectedPlayers[peerId];
+            }
+
+            const existingEntry = connectedPlayers[canonicalPeerId] || {};
+            const wasKnown = !!connectedPlayers[canonicalPeerId];
+            if (!wasKnown) knownLeftPeers.delete(canonicalPeerId);
+            connectedPlayers[canonicalPeerId] = {
+                addr: normalizedAddr || existingEntry.addr || null,
+                name: name || existingEntry.name || 'Player',
                 lastSeen: Date.now()
             };
-            ensurePlayerScoreEntry(peerId);
+            ensurePlayerScoreEntry(canonicalPeerId);
             debugLog('CONNECTED_PLAYER_RECORDED', {
-                peerId,
-                addr: addr || null,
-                name: name || 'Player',
+                peerId: canonicalPeerId,
+                aliasPeerId: peerId !== canonicalPeerId ? peerId : null,
+                addr: connectedPlayers[canonicalPeerId].addr,
+                name: connectedPlayers[canonicalPeerId].name,
                 wasKnown,
                 totalConnected: Object.keys(connectedPlayers).length
             });
@@ -1467,7 +1548,13 @@
             updateAllPlayersScoreboard();
             updateModeSelectState();
             if (gameModeSelect.value === 'webxdc-tournament') {
-                updateTournamentMatchState();
+                // Only call updateTournamentMatchState for genuinely new peers or when the tournament
+                // hasn't started yet (no schedule). Calling it on every PRESENCE heartbeat for
+                // already-known peers can interfere with active match seat assignment and timers.
+                const tournamentNotStarted = !tournamentState.schedule.length || !networkPlayers[1] || !networkPlayers[2];
+                if (!wasKnown || tournamentNotStarted) {
+                    updateTournamentMatchState();
+                }
             }
         }
 
@@ -1532,10 +1619,11 @@
         }
 
         function findKnownPeerIdByAddr(addr) {
-            if (!addr) return null;
+            const normalizedAddr = normalizeAddr(addr);
+            if (!normalizedAddr) return null;
             for (const [peerId, peerMeta] of Object.entries(connectedPlayers)) {
                 if (!peerId || !peerMeta) continue;
-                if (peerMeta.addr === addr) return peerId;
+                if (normalizeAddr(peerMeta.addr) === normalizedAddr) return peerId;
             }
             return null;
         }
@@ -1688,9 +1776,16 @@
             currentPlayer = state.currentPlayer === 2 ? 2 : 1;
             gameOver = !!state.gameOver;
             turnDeadlineTs = Number.isFinite(state.turnDeadlineTs) ? state.turnDeadlineTs : null;
-            networkPlayers = {
+            // Merge incoming networkPlayers: prefer non-null incoming value, but keep existing
+            // non-null slot if the incoming STATE has null (e.g. first-mover's STATE sent before
+            // second player claimed a seat). Overwriting with null triggers unwanted re-randomization.
+            const incomingNP = {
                 1: typeof state.networkPlayers?.[1] === 'string' ? state.networkPlayers[1] : null,
                 2: typeof state.networkPlayers?.[2] === 'string' ? state.networkPlayers[2] : null
+            };
+            networkPlayers = {
+                1: incomingNP[1] || networkPlayers[1] || null,
+                2: incomingNP[2] || networkPlayers[2] || null
             };
             syncMyAssignedPlayer();
             if (state.gameMode === 'webxdc-tournament' || state.tournamentState?.enabled) {
@@ -1702,7 +1797,13 @@
                     ? state.tournamentState.countdownDeadlineTs
                     : null;
                 if (state.gameMode === 'webxdc-tournament') {
-                    updateTournamentMatchState(tournamentState.pairIndex);
+                    // Only run seat assignment if at least one slot is still unset. When both slots
+                    // are already filled (active match), skip to avoid spurious re-randomization.
+                    if (!networkPlayers[1] || !networkPlayers[2]) {
+                        updateTournamentMatchState(tournamentState.pairIndex);
+                    } else {
+                        syncMyAssignedPlayer();
+                    }
                 }
             }
 
@@ -1718,7 +1819,9 @@
                 for (const [peerId, rawValue] of Object.entries(state.playerScores)) {
                     if (!peerId) continue;
                     const scoreValue = Number.isInteger(rawValue) ? rawValue : 0;
-                    nextScores[peerId] = scoreValue;
+                    const peerAddr = connectedPlayers[peerId]?.addr || null;
+                    const canonicalId = getCanonicalPeerId(peerId, peerAddr) || peerId;
+                    nextScores[canonicalId] = Math.max(nextScores[canonicalId] || 0, scoreValue);
                 }
                 playerScoresByPeer = nextScores;
             }
@@ -1795,6 +1898,7 @@
             scores[1] = 0;
             scores[2] = 0;
             gameStartAnnounced = false;
+            tournamentPlayerAddrLock.clear();
             updateAllPlayersScoreboard();
         }
 
@@ -1849,6 +1953,7 @@
             tournamentState.pairIndex = nextPairIndex;
             tournamentState.lastMatchKey = null;
             tournamentState.countdownDeadlineTs = nextCountdownDeadlineTs;
+            tournamentPlayerAddrLock.clear();
             networkPlayers = { 1: null, 2: null };
             myAssignedPlayer = null;
             initBoard(false);
@@ -1934,7 +2039,11 @@
             }
             if (gameModeSelect.value === 'webxdc-tournament') {
                 tournamentState.enabled = true;
-                tournamentState.schedule = buildTournamentSchedule();
+                // Never rebuild the schedule mid-tournament; dynamic deduplication can shrink it
+                // and break pairIndex, seat assignment, and timers. Only build if not yet set.
+                if (!tournamentState.schedule.length) {
+                    tournamentState.schedule = buildTournamentSchedule();
+                }
                 if (!tournamentState.schedule.length) {
                     networkPlayers = { 1: null, 2: null };
                     myAssignedPlayer = null;
@@ -2024,6 +2133,16 @@
             if (isNaN(r) || isNaN(c) || board[r][c] !== 0) return; 
 
             if (gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament') {
+                // If another device with my same addr has already claimed a tournament slot, I'm a spectator.
+                const myAddrNorm = normalizeAddr(myAddr);
+                if (myAddrNorm && gameModeSelect.value === 'webxdc-tournament' && tournamentPlayerAddrLock.size > 0) {
+                    const lockedPeerId = tournamentPlayerAddrLock.get(myAddrNorm);
+                    if (lockedPeerId && lockedPeerId !== myPeerId) {
+                        debugLog('MOVE_BLOCKED', { reason: 'addr-locked-to-other-device', myPeerId, lockedPeerId, myAddrNorm });
+                        return;
+                    }
+                }
+
                 const p1Owner = networkPlayers[1];
                 const p2Owner = networkPlayers[2];
                 const bothPlayersAssigned = !!p1Owner && !!p2Owner;
@@ -2084,6 +2203,10 @@
                     myAssignedPlayer = playedAs;
                     if (playedAs === 1) p1NameInput.value = myName + " (Black)";
                     if (playedAs === 2) p2NameInput.value = myName + " (White)";
+                    const myAddrNorm = normalizeAddr(myAddr);
+                    if (myAddrNorm && gameModeSelect.value === 'webxdc-tournament') {
+                        tournamentPlayerAddrLock.set(myAddrNorm, myPeerId);
+                    }
                     debugLog('PLAYER_SLOT_CLAIMED_LOCAL', {
                         playedAs,
                         myAssignedPlayer,

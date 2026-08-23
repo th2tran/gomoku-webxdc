@@ -389,6 +389,7 @@
         let gameStartAnnounced = false;
         const playerStaleMs = 45000;
         const knownLeftPeers = new Set();
+        let localLeaveBroadcastSent = false;
         const moveTimeLimitMs = 30000;
         let turnDeadlineTs = null;
         let moveTimerInterval = null;
@@ -1056,6 +1057,45 @@
             }, 5000);
         }
 
+        function broadcastLocalLeave(reason = 'window-close') {
+            if (localLeaveBroadcastSent) return;
+            if (!window.webxdc) return;
+            if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
+
+            localLeaveBroadcastSent = true;
+            const leaveEventId = `leave:${myPeerId}:${Date.now()}`;
+            const leaverName = cleanPlayerName(myName || displayNameForPeer(myPeerId));
+            const noteText = `${leaverName} left the game.`;
+
+            sendXdcUpdate({
+                action: 'LEAVE',
+                leftPeerId: myPeerId,
+                leaveEventId,
+                noteText,
+                addr: myAddr,
+                name: myName,
+                peerId: myPeerId
+            }, noteText, 'Player left');
+
+            const p1Owner = networkPlayers[1];
+            const p2Owner = networkPlayers[2];
+            if (!gameOver && p1Owner && p2Owner && countMoves(board) > 0 && (myPeerId === p1Owner || myPeerId === p2Owner)) {
+                const winnerPeerId = myPeerId === p1Owner ? p2Owner : p1Owner;
+                if (winnerPeerId) {
+                    sendXdcUpdate({
+                        action: 'WITHDRAWAL',
+                        quitterPeerId: myPeerId,
+                        winnerPeerId,
+                        addr: myAddr,
+                        name: myName,
+                        peerId: myPeerId
+                    }, `${leaverName} withdrew.`, 'Withdrawal');
+                }
+            }
+
+            debugLog('LOCAL_LEAVE_BROADCAST', { reason, leaveEventId });
+        }
+
         function rememberSeenMessageId(messageId) {
             if (!messageId || seenMessageIds.has(messageId)) return;
             seenMessageIds.add(messageId);
@@ -1206,7 +1246,7 @@
             if (senderPeerId) {
                 rememberConnectedPlayer(senderPeerId, senderName, senderAddr);
             }
-            if (payload.action === 'JOIN' && isNewPeer && !alreadyNotifiedJoin && !isRecentJoinDuplicate) {
+            if (payload.action !== 'PRESENCE' && payload.action !== 'LEAVE' && payload.action !== 'WITHDRAWAL' && isNewPeer && !alreadyNotifiedJoin && !isRecentJoinDuplicate) {
                 const joinDedupeSource = senderAddr || senderPeerId || cleanPlayerName(senderName).toLowerCase();
                 addNotification(`${cleanPlayerName(senderName)} joined the game.`, {
                     id: `join-detected:${senderPeerId}:${payload.msgId || Date.now()}`,
@@ -1230,6 +1270,8 @@
             }
 
             if (payload.action === 'NOTIFY') {
+                const noteText = typeof payload.noteText === 'string' ? payload.noteText.trim() : '';
+                if (/ joined the game\.$/i.test(noteText)) return;
                 addNotification(payload.noteText, {
                     id: payload.noteId,
                     at: payload.noteAt,
@@ -2370,6 +2412,8 @@
         startRealtimeChannel();
         startPresenceSync();
         startPlayerExitMonitor();
+        window.addEventListener('pagehide', () => broadcastLocalLeave('pagehide'));
+        window.addEventListener('beforeunload', () => broadcastLocalLeave('beforeunload'));
         setTimeout(() => {
             if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
             if (!remoteUpdateSeen && Object.keys(connectedPlayers).length <= 1) {

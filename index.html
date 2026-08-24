@@ -387,8 +387,9 @@
         const maxSeenMessageIds = 500;
         const joinNotificationKeys = new Set();
         let gameStartAnnounced = false;
-        const playerStaleMs = 45000;
+        const playerStaleMs = 15000;
         const knownLeftPeers = new Set();
+        const canonicalPeerIdByAddr = new Map();
         let localLeaveBroadcastSent = false;
         const moveTimeLimitMs = 30000;
         let turnDeadlineTs = null;
@@ -965,10 +966,14 @@
             const leaverName = displayNameForPeer(peerId);
             const leaverAddr = connectedPlayers[peerId]?.addr || null;
             delete connectedPlayers[peerId];
+            if (networkPlayers[1] === peerId) networkPlayers[1] = null;
+            if (networkPlayers[2] === peerId) networkPlayers[2] = null;
+            syncMyAssignedPlayer();
             joinNotificationKeys.delete(`peer:${peerId}`);
             if (leaverAddr) joinNotificationKeys.delete(`addr:${leaverAddr}`);
             updateConnectionIndicator();
             updateAllPlayersScoreboard();
+            updateTurnIndicator();
 
             addNotification(noteText || `${leaverName} left the game.`, {
                 id: leaveEventId || `leave-local:${peerId}`,
@@ -1032,6 +1037,32 @@
             playerExitMonitorTimer = setInterval(() => {
                 if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
                 const now = Date.now();
+
+                const activePeerId = Number.isInteger(currentPlayer) && networkPlayers[currentPlayer]
+                    ? networkPlayers[currentPlayer]
+                    : null;
+                if (activePeerId && activePeerId !== myPeerId) {
+                    const activeRecord = connectedPlayers[activePeerId];
+                    const activeLastSeen = activeRecord?.lastSeen;
+                    const activePeerIsMissing = !activeRecord || !Number.isFinite(activeLastSeen);
+                    const activePeerIsStale = Number.isFinite(activeLastSeen) && now - activeLastSeen > playerStaleMs;
+                    if (activePeerIsMissing || activePeerIsStale) {
+                        const localWinnerPeerId = myPeerId;
+                        const leaverName = displayNameForPeer(activePeerId);
+                        applyPeerLeft(activePeerId, 'local-detection', `leave:${activePeerId}:${Date.now()}`, `${leaverName} left the game.`);
+                        applyWithdrawalResult(activePeerId, localWinnerPeerId, 'local-detection');
+                        sendXdcUpdate({
+                            action: 'WITHDRAWAL',
+                            quitterPeerId: activePeerId,
+                            winnerPeerId: localWinnerPeerId,
+                            addr: myAddr,
+                            name: myName,
+                            peerId: myPeerId
+                        }, `${leaverName} left the game.`, 'Withdrawal detected');
+                        broadcastStateSync('withdrawal');
+                        return;
+                    }
+                }
 
                 const stalePeers = Object.keys(connectedPlayers).filter((peerId) => {
                     if (!peerId || peerId === myPeerId) return false;
@@ -1524,6 +1555,9 @@
                 debugLog('CONNECTED_PLAYER_SKIPPED', { reason: 'missing canonical peer', peerId, name: name || null, addr: normalizedAddr || null });
                 return;
             }
+            if (normalizedAddr) {
+                canonicalPeerIdByAddr.set(normalizedAddr, canonicalPeerId);
+            }
 
             const sameAddrPeer = normalizedAddr
                 ? Object.keys(connectedPlayers).find((candidatePeerId) => {
@@ -1539,13 +1573,15 @@
                 delete playerScoresByPeer[sameAddrPeer];
                 delete connectedPlayers[sameAddrPeer];
             }
-            if (peerId !== canonicalPeerId && connectedPlayers[peerId]) {
+            if (peerId !== canonicalPeerId) {
                 const staleScore = playerScoresByPeer[peerId] || 0;
                 if (staleScore > 0) {
                     playerScoresByPeer[canonicalPeerId] = (playerScoresByPeer[canonicalPeerId] || 0) + staleScore;
                 }
                 delete playerScoresByPeer[peerId];
-                delete connectedPlayers[peerId];
+                if (connectedPlayers[peerId]) {
+                    delete connectedPlayers[peerId];
+                }
             }
 
             const existingEntry = connectedPlayers[canonicalPeerId] || {};
@@ -1644,7 +1680,7 @@
                 if (!peerId || !peerMeta) continue;
                 if (normalizeAddr(peerMeta.addr) === normalizedAddr) return peerId;
             }
-            return null;
+            return canonicalPeerIdByAddr.get(normalizedAddr) || null;
         }
 
         function updateConnectionIndicator() {
@@ -1739,15 +1775,32 @@
         function applyPeerListSync(payload, sourcePeerId = null, sourceAddr = null) {
             const peers = Array.isArray(payload?.peers) ? payload.peers : [];
             if (!peers.length) return;
+            const incomingPeerIds = new Set();
             for (const peer of peers) {
                 if (!peer || typeof peer.peerId !== 'string' || !peer.peerId.trim()) continue;
                 const peerId = peer.peerId.trim();
                 if (peerId === myPeerId) continue;
+                incomingPeerIds.add(peerId);
                 const peerAddr = normalizeAddr(peer.addr) || normalizeAddr(sourceAddr) || null;
                 rememberConnectedPlayer(peerId, peer.name || 'Player', peerAddr || null, { refreshLastSeen: false });
             }
             if (sourcePeerId && sourcePeerId !== myPeerId) {
+                incomingPeerIds.add(sourcePeerId);
                 rememberConnectedPlayer(sourcePeerId, payload?.name || 'Player', normalizeAddr(sourceAddr) || null, { refreshLastSeen: false });
+            }
+            const missingPeers = Object.keys(connectedPlayers).filter((peerId) => {
+                if (!peerId || peerId === myPeerId) return false;
+                return !incomingPeerIds.has(peerId) && !knownLeftPeers.has(peerId);
+            });
+            for (const missingPeerId of missingPeers) {
+                const missingPeerName = displayNameForPeer(missingPeerId);
+                applyPeerLeft(missingPeerId, 'peer-list-prune', `leave:${missingPeerId}:${Date.now()}`, `${missingPeerName} left the game.`);
+                const activePeerId = Number.isInteger(currentPlayer) && networkPlayers[currentPlayer]
+                    ? networkPlayers[currentPlayer]
+                    : null;
+                if (missingPeerId === activePeerId && myPeerId !== missingPeerId && !gameOver) {
+                    applyWithdrawalResult(missingPeerId, myPeerId, 'peer-list-prune');
+                }
             }
             const rosterSummary = formatPeerRosterNames(peers.filter((peer) => peer.peerId !== myPeerId));
             if (rosterSummary) {
@@ -1760,7 +1813,8 @@
             debugLog('PEER_LIST_SYNC_APPLIED', {
                 sourcePeerId: sourcePeerId || null,
                 peerCount: peers.length,
-                peers: rosterSummary || 'none'
+                peers: rosterSummary || 'none',
+                missingPeers
             });
         }
 
@@ -2238,6 +2292,8 @@
                     `${myName} reset the game board.`
                 );
                 broadcastStateSync('reset');
+                requestPeerListSync('reset');
+                sendPeerListSync('reset');
             }
             startMoveTimerForCurrentTurn({ resetDeadline: true });
         }
@@ -2684,8 +2740,19 @@
             requestPeerListSync('startup');
             sendPeerListSync('startup');
         }, 1000);
-        window.addEventListener('pagehide', () => broadcastLocalLeave('pagehide'));
-        window.addEventListener('beforeunload', () => broadcastLocalLeave('beforeunload'));
+        const triggerLocalLeave = (reason) => {
+            if (document.visibilityState === 'hidden' || reason === 'pagehide' || reason === 'beforeunload' || reason === 'unload' || reason === 'visibilitychange') {
+                broadcastLocalLeave(reason);
+            }
+        };
+        window.addEventListener('pagehide', () => triggerLocalLeave('pagehide'));
+        window.addEventListener('beforeunload', () => triggerLocalLeave('beforeunload'));
+        window.addEventListener('unload', () => triggerLocalLeave('unload'));
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') {
+                triggerLocalLeave('visibilitychange');
+            }
+        });
         setTimeout(() => {
             if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
             if (!remoteUpdateSeen && Object.keys(connectedPlayers).length <= 1) {

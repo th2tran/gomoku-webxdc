@@ -387,6 +387,8 @@
         const maxSeenMessageIds = 500;
         const joinNotificationKeys = new Set();
         let gameStartAnnounced = false;
+        let webxdcSeatSeed = null;
+        let pveComputerPlayer = 2;
         const playerStaleMs = 15000;
         const knownLeftPeers = new Set();
         const canonicalPeerIdByAddr = new Map();
@@ -404,6 +406,7 @@
             lastMatchKey: null,
             finished: false,
             winCounts: {},
+            seatSeed: null,
             countdownDeadlineTs: null,
             countdownTimer: null
         };
@@ -657,6 +660,23 @@
             return schedule;
         }
 
+        function createSeatSeed() {
+            return `${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+        }
+
+        function getTournamentSeatAssignment(pair, pairIndex, seatSeed = null) {
+            if (!Array.isArray(pair) || pair.length < 2) return [pair?.[0] || null, pair?.[1] || null];
+            if (!seatSeed) {
+                return Math.random() < 0.5 ? [...pair] : [pair[1], pair[0]];
+            }
+            const hashInput = `${seatSeed}:${Number.isInteger(pairIndex) ? pairIndex : 0}:${pair[0]}|${pair[1]}`;
+            let hash = 0;
+            for (let i = 0; i < hashInput.length; i++) {
+                hash = ((hash * 31) + hashInput.charCodeAt(i)) >>> 0;
+            }
+            return (hash % 2) === 0 ? [...pair] : [pair[1], pair[0]];
+        }
+
         function getTournamentPairings() {
             if (!tournamentState.schedule.length) {
                 tournamentState.schedule = buildTournamentSchedule();
@@ -664,13 +684,115 @@
             return tournamentState.schedule;
         }
 
+        function setNetworkPlayerLabels() {
+            const p1Name = networkPlayers[1] ? displayNameForPeer(networkPlayers[1]) : 'Waiting for P1 (Black)';
+            const p2Name = networkPlayers[2] ? displayNameForPeer(networkPlayers[2]) : 'Waiting for P2 (White)';
+            p1NameInput.value = p1Name + (peerRepresentsLocalPlayer(networkPlayers[1]) ? ' (Black)' : '');
+            p2NameInput.value = p2Name + (peerRepresentsLocalPlayer(networkPlayers[2]) ? ' (White)' : '');
+        }
+
+        function getCurrentWebxdcGameParticipants() {
+            const participants = [];
+            const seen = new Set();
+            const addPeer = (peerId) => {
+                if (!peerId) return;
+                const canonicalPeerId = getCanonicalPeerId(peerId, connectedPlayers[peerId]?.addr || null) || peerId;
+                if (!canonicalPeerId || seen.has(canonicalPeerId)) return;
+                seen.add(canonicalPeerId);
+                participants.push(canonicalPeerId);
+            };
+
+            addPeer(networkPlayers[1]);
+            addPeer(networkPlayers[2]);
+
+            const remainingPeers = [myPeerId, ...Object.keys(connectedPlayers)]
+                .map((peerId) => {
+                    const record = peerId === myPeerId ? { addr: myAddr } : connectedPlayers[peerId];
+                    return getCanonicalPeerId(peerId, record?.addr || null) || peerId;
+                })
+                .filter(Boolean)
+                .filter((peerId, index, arr) => arr.indexOf(peerId) === index)
+                .sort((a, b) => {
+                    const aName = displayNameForPeer(a);
+                    const bName = displayNameForPeer(b);
+                    return aName.localeCompare(bName) || a.localeCompare(b);
+                });
+
+            for (const peerId of remainingPeers) {
+                addPeer(peerId);
+                if (participants.length >= 2) break;
+            }
+            return participants.slice(0, 2);
+        }
+
+        function assignWebxdcSeatsForNewGame(seatSeed = createSeatSeed(), participants = null) {
+            webxdcSeatSeed = seatSeed;
+            const pair = Array.isArray(participants) && participants.length
+                ? participants.filter(Boolean).slice(0, 2)
+                : getCurrentWebxdcGameParticipants();
+            if (pair.length < 2) {
+                networkPlayers = { 1: null, 2: null };
+                myAssignedPlayer = null;
+                setNetworkPlayerLabels();
+                debugLog('WEBXDC_SEATS_PENDING', { seatSeed, participants: pair });
+                return;
+            }
+            const seatPair = getTournamentSeatAssignment(pair, 0, seatSeed);
+            networkPlayers[1] = seatPair[0] || null;
+            networkPlayers[2] = seatPair[1] || null;
+            syncMyAssignedPlayer();
+            setNetworkPlayerLabels();
+            debugLog('WEBXDC_SEATS_ASSIGNED', { seatSeed, pair, seatPair });
+        }
+
+        function assignPveSeatsForNewGame(seatSeed = null) {
+            const effectiveSeed = typeof seatSeed === 'string' && seatSeed ? seatSeed : null;
+            const seatPair = effectiveSeed
+                ? getTournamentSeatAssignment(['human', 'computer'], 0, effectiveSeed)
+                : ['human', 'computer'];
+            pveComputerPlayer = seatPair[0] === 'computer' ? 1 : 2;
+            if (pveComputerPlayer === 1) {
+                p1NameInput.value = 'Computer (Black)';
+                p2NameInput.value = 'Player 1 (White)';
+                p1NameInput.disabled = true;
+                p2NameInput.disabled = false;
+            } else {
+                p1NameInput.value = 'Player 1 (Black)';
+                p2NameInput.value = 'Computer (White)';
+                p1NameInput.disabled = false;
+                p2NameInput.disabled = true;
+            }
+            debugLog('PVE_SEATS_ASSIGNED', { seatSeed: effectiveSeed, pveComputerPlayer });
+        }
+
+        function isComputerPlayer(playerNumber) {
+            return gameModeSelect.value === 'pve' && playerNumber === pveComputerPlayer;
+        }
+
+        function maybeStartComputerTurn() {
+            if (gameModeSelect.value !== 'pve' || gameOver || isComputerThinking || !isComputerPlayer(currentPlayer)) return;
+            isComputerThinking = true;
+            setTimeout(makeComputerMove, 400);
+        }
+
+        function peerRepresentsLocalPlayer(peerId) {
+            if (!peerId) return false;
+            if (peerId === myPeerId) return true;
+            const myAddrNorm = normalizeAddr(myAddr);
+            if (!myAddrNorm) return false;
+            if (normalizeAddr(connectedPlayers[peerId]?.addr) === myAddrNorm) return true;
+            return findKnownPeerIdByAddr(myAddrNorm) === peerId;
+        }
+
         function syncMyAssignedPlayer() {
-            myAssignedPlayer = networkPlayers[1] === myPeerId ? 1 : networkPlayers[2] === myPeerId ? 2 : null;
+            myAssignedPlayer = peerRepresentsLocalPlayer(networkPlayers[1]) ? 1
+                : peerRepresentsLocalPlayer(networkPlayers[2]) ? 2
+                : null;
         }
 
         function getLocalAssignedPlayerNumber() {
-            if (networkPlayers[1] === myPeerId) return 1;
-            if (networkPlayers[2] === myPeerId) return 2;
+            if (peerRepresentsLocalPlayer(networkPlayers[1])) return 1;
+            if (peerRepresentsLocalPlayer(networkPlayers[2])) return 2;
             if (myAssignedPlayer === 1 || myAssignedPlayer === 2) return myAssignedPlayer;
             return null;
         }
@@ -692,21 +814,11 @@
                 : ((tournamentState.pairIndex || 0) % tournamentState.pairings.length);
             tournamentState.pairIndex = (safeIndex + tournamentState.pairings.length) % tournamentState.pairings.length;
             const pair = tournamentState.pairings[tournamentState.pairIndex];
-            const existingSeatAssignment = !!networkPlayers[1] && !!networkPlayers[2]
-                && pair.includes(networkPlayers[1])
-                && pair.includes(networkPlayers[2])
-                && networkPlayers[1] !== networkPlayers[2];
-            const shouldRandomizeSeats = !existingSeatAssignment;
-            const randomizedPair = shouldRandomizeSeats
-                ? (Math.random() < 0.5 ? [...pair] : [pair[1], pair[0]])
-                : [networkPlayers[1], networkPlayers[2]];
+            const randomizedPair = getTournamentSeatAssignment(pair, tournamentState.pairIndex, tournamentState.seatSeed);
             networkPlayers[1] = randomizedPair[0] || null;
             networkPlayers[2] = randomizedPair[1] || null;
             syncMyAssignedPlayer();
-            const p1Name = networkPlayers[1] ? displayNameForPeer(networkPlayers[1]) : 'Waiting for P1 (Black)';
-            const p2Name = networkPlayers[2] ? displayNameForPeer(networkPlayers[2]) : 'Waiting for P2 (White)';
-            p1NameInput.value = p1Name + (networkPlayers[1] === myPeerId ? ' (Black)' : '');
-            p2NameInput.value = p2Name + (networkPlayers[2] === myPeerId ? ' (White)' : '');
+            setNetworkPlayerLabels();
             if (!networkPlayers[1] || !networkPlayers[2]) {
                 currentPlayer = 1;
                 turnDeadlineTs = null;
@@ -721,8 +833,8 @@
                 currentPlayer = 1;
                 tournamentState.lastMatchKey = matchKey;
             }
-            if (myPeerId === networkPlayers[1] || myPeerId === networkPlayers[2]) {
-                const isMyTurn = myPeerId === networkPlayers[1];
+            if (peerRepresentsLocalPlayer(networkPlayers[1]) || peerRepresentsLocalPlayer(networkPlayers[2])) {
+                const isMyTurn = peerRepresentsLocalPlayer(networkPlayers[1]);
                 if (isNewMatch) {
                     addNotification(
                         isMyTurn
@@ -732,7 +844,13 @@
                     );
                 }
             }
-            debugLog('TOURNAMENT_PAIRING_UPDATED', { pairIndex: tournamentState.pairIndex, pair, randomizedPair, shouldRandomizeSeats, matchKey });
+            debugLog('TOURNAMENT_PAIRING_UPDATED', {
+                pairIndex: tournamentState.pairIndex,
+                pair,
+                randomizedPair,
+                seatSeed: tournamentState.seatSeed,
+                matchKey
+            });
         }
 
         function getTournamentStandings() {
@@ -1041,7 +1159,7 @@
                 const activePeerId = Number.isInteger(currentPlayer) && networkPlayers[currentPlayer]
                     ? networkPlayers[currentPlayer]
                     : null;
-                if (activePeerId && activePeerId !== myPeerId) {
+                if (activePeerId && !peerRepresentsLocalPlayer(activePeerId)) {
                     const activeRecord = connectedPlayers[activePeerId];
                     const activeLastSeen = activeRecord?.lastSeen;
                     const activePeerIsMissing = !activeRecord || !Number.isFinite(activeLastSeen);
@@ -1130,8 +1248,8 @@
 
             const p1Owner = networkPlayers[1];
             const p2Owner = networkPlayers[2];
-            if (!gameOver && p1Owner && p2Owner && countMoves(board) > 0 && (myPeerId === p1Owner || myPeerId === p2Owner)) {
-                const winnerPeerId = myPeerId === p1Owner ? p2Owner : p1Owner;
+            if (!gameOver && p1Owner && p2Owner && countMoves(board) > 0 && (peerRepresentsLocalPlayer(p1Owner) || peerRepresentsLocalPlayer(p2Owner))) {
+                const winnerPeerId = peerRepresentsLocalPlayer(p1Owner) ? p2Owner : p1Owner;
                 if (winnerPeerId) {
                     sendXdcUpdate({
                         action: 'WITHDRAWAL',
@@ -1368,6 +1486,7 @@
                         fromRemote: true,
                         pairIndex: Number.isInteger(payload.pairIndex) ? payload.pairIndex : 0,
                         schedule: Array.isArray(payload.schedule) ? payload.schedule : buildTournamentSchedule(),
+                        seatSeed: typeof payload.seatSeed === 'string' && payload.seatSeed ? payload.seatSeed : null,
                         countdownDeadlineTs: Number.isFinite(payload.countdownDeadlineTs)
                             ? payload.countdownDeadlineTs
                             : Date.now() + 10000,
@@ -1422,11 +1541,18 @@
                 const isTournamentReset = !!payload.tournamentReset || gameModeSelect.value === 'webxdc-tournament';
                 if (isTournamentReset) {
                     gameModeSelect.value = 'webxdc-tournament';
-                    resetTournamentProgress();
+                    resetTournamentProgress(typeof payload.seatSeed === 'string' && payload.seatSeed ? payload.seatSeed : createSeatSeed());
                     startTournamentCountdown();
                     updateTournamentMatchState(0);
                 }
-                initBoard(false);
+                const resetPlayers = [
+                    typeof payload.networkPlayers?.[1] === 'string' ? payload.networkPlayers[1] : null,
+                    typeof payload.networkPlayers?.[2] === 'string' ? payload.networkPlayers[2] : null
+                ].filter(Boolean);
+                initBoard(false, {
+                    webxdcSeatSeed: !isTournamentReset && typeof payload.seatSeed === 'string' && payload.seatSeed ? payload.seatSeed : null,
+                    webxdcParticipants: !isTournamentReset ? resetPlayers : null
+                });
             }
         }
 
@@ -1923,6 +2049,7 @@
                         enabled: tournamentState.enabled,
                         pairIndex: tournamentState.pairIndex,
                         finished: tournamentState.finished,
+                        seatSeed: tournamentState.seatSeed,
                         countdownDeadlineTs: tournamentState.countdownDeadlineTs
                     }
                 }
@@ -1974,6 +2101,9 @@
                 tournamentState.enabled = true;
                 tournamentState.finished = !!state.tournamentState?.finished;
                 tournamentState.pairIndex = Number.isInteger(state.tournamentState?.pairIndex) ? state.tournamentState.pairIndex : 0;
+                tournamentState.seatSeed = typeof state.tournamentState?.seatSeed === 'string' && state.tournamentState.seatSeed
+                    ? state.tournamentState.seatSeed
+                    : tournamentState.seatSeed;
                 tournamentState.countdownDeadlineTs = Number.isFinite(state.tournamentState?.countdownDeadlineTs)
                     ? state.tournamentState.countdownDeadlineTs
                     : null;
@@ -2062,12 +2192,13 @@
             resetBtn.disabled = tournamentInProgress;
         }
 
-        function resetTournamentProgress() {
+        function resetTournamentProgress(seatSeed = createSeatSeed()) {
             tournamentState.enabled = true;
             tournamentState.finished = false;
             tournamentState.schedule = buildTournamentSchedule();
             tournamentState.pairIndex = 0;
             tournamentState.lastMatchKey = null;
+            tournamentState.seatSeed = seatSeed;
             tournamentState.countdownDeadlineTs = Date.now() + 10000;
             if (tournamentState.countdownTimer) {
                 clearInterval(tournamentState.countdownTimer);
@@ -2118,12 +2249,13 @@
             updateModeSelectState();
         }
 
-        function beginTournamentMode({ fromRemote = false, pairIndex = 0, schedule = null, countdownDeadlineTs = null, broadcast = true } = {}) {
+        function beginTournamentMode({ fromRemote = false, pairIndex = 0, schedule = null, countdownDeadlineTs = null, seatSeed = null, broadcast = true } = {}) {
             const nextSchedule = Array.isArray(schedule) ? schedule : buildTournamentSchedule();
             const nextPairIndex = Number.isInteger(pairIndex) ? pairIndex : 0;
             const nextCountdownDeadlineTs = Number.isFinite(countdownDeadlineTs)
                 ? countdownDeadlineTs
                 : Date.now() + 10000;
+            const nextSeatSeed = typeof seatSeed === 'string' && seatSeed ? seatSeed : createSeatSeed();
 
             gameModeSelect.value = 'webxdc-tournament';
             p1NameInput.disabled = true;
@@ -2133,6 +2265,7 @@
             tournamentState.schedule = nextSchedule;
             tournamentState.pairIndex = nextPairIndex;
             tournamentState.lastMatchKey = null;
+            tournamentState.seatSeed = nextSeatSeed;
             tournamentState.countdownDeadlineTs = nextCountdownDeadlineTs;
             tournamentPlayerAddrLock.clear();
             networkPlayers = { 1: null, 2: null };
@@ -2149,6 +2282,7 @@
                     mode: 'webxdc-tournament',
                     pairIndex: tournamentState.pairIndex,
                     countdownDeadlineTs: tournamentState.countdownDeadlineTs,
+                    seatSeed: tournamentState.seatSeed,
                     schedule: tournamentState.schedule,
                     peerId: myPeerId,
                     name: myName,
@@ -2163,7 +2297,14 @@
 
         function broadcastTournamentMode() {
             if (!window.webxdc || gameModeSelect.value !== 'webxdc-tournament') return;
-            beginTournamentMode({ fromRemote: false, pairIndex: tournamentState.pairIndex, schedule: tournamentState.schedule, countdownDeadlineTs: tournamentState.countdownDeadlineTs, broadcast: true });
+            beginTournamentMode({
+                fromRemote: false,
+                pairIndex: tournamentState.pairIndex,
+                schedule: tournamentState.schedule,
+                countdownDeadlineTs: tournamentState.countdownDeadlineTs,
+                seatSeed: tournamentState.seatSeed,
+                broadcast: true
+            });
         }
 
         gameModeSelect.addEventListener('change', (e) => {
@@ -2202,7 +2343,7 @@
             }
         });
 
-        function initBoard(sendNetworkUpdate = false) {
+        function initBoard(sendNetworkUpdate = false, options = {}) {
             boardElement.innerHTML = '';
             board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
             gameOver = false;
@@ -2215,8 +2356,14 @@
                 myAssignedPlayer = null;
                 gameStartAnnounced = false;
                 rememberConnectedPlayer(myPeerId, myName, myAddr);
-                if(p1NameInput.value.includes("Waiting")) p1NameInput.value = "Waiting for P1 (Black)";
-                if(p2NameInput.value.includes("Waiting")) p2NameInput.value = "Waiting for P2 (White)";
+                webxdcSeatSeed = typeof options.webxdcSeatSeed === 'string' && options.webxdcSeatSeed
+                    ? options.webxdcSeatSeed
+                    : null;
+                if (webxdcSeatSeed) {
+                    assignWebxdcSeatsForNewGame(webxdcSeatSeed, options.webxdcParticipants);
+                } else {
+                    setNetworkPlayerLabels();
+                }
             }
             if (gameModeSelect.value === 'webxdc-tournament') {
                 tournamentState.enabled = true;
@@ -2243,8 +2390,9 @@
                 } else {
                     const matchPair = tournamentState.schedule[tournamentState.pairIndex];
                     if (Array.isArray(matchPair) && matchPair.length === 2) {
-                        networkPlayers[1] = matchPair[0] || null;
-                        networkPlayers[2] = matchPair[1] || null;
+                        const seatPair = getTournamentSeatAssignment(matchPair, tournamentState.pairIndex, tournamentState.seatSeed);
+                        networkPlayers[1] = seatPair[0] || null;
+                        networkPlayers[2] = seatPair[1] || null;
                     }
                     syncMyAssignedPlayer();
                 }
@@ -2255,10 +2403,7 @@
                 networkPlayers = { 1: null, 2: null };
                 myAssignedPlayer = null;
                 gameStartAnnounced = false;
-                p1NameInput.value = "Player 1 (Black)";
-                p2NameInput.value = "Computer (White)";
-                p1NameInput.disabled = false;
-                p2NameInput.disabled = true;
+                assignPveSeatsForNewGame(options.pveSeatSeed);
             }
             if (gameModeSelect.value === 'pvp') {
                 networkPlayers = { 1: null, 2: null };
@@ -2284,6 +2429,12 @@
                     {
                         action: 'RESET',
                         tournamentReset: gameModeSelect.value === 'webxdc-tournament',
+                        seatSeed: gameModeSelect.value === 'webxdc-tournament'
+                            ? tournamentState.seatSeed
+                            : gameModeSelect.value === 'webxdc'
+                                ? webxdcSeatSeed
+                                : null,
+                        networkPlayers: gameModeSelect.value === 'webxdc' ? { 1: networkPlayers[1], 2: networkPlayers[2] } : undefined,
                         addr: myAddr,
                         name: myName,
                         peerId: myPeerId
@@ -2296,6 +2447,7 @@
                 sendPeerListSync('reset');
             }
             startMoveTimerForCurrentTurn({ resetDeadline: true });
+            maybeStartComputerTurn();
         }
 
         function handleCellClick(e) {
@@ -2329,8 +2481,10 @@
                 const p1Owner = networkPlayers[1];
                 const p2Owner = networkPlayers[2];
                 const bothPlayersAssigned = !!p1Owner && !!p2Owner;
-                const iAmSpectator = bothPlayersAssigned && p1Owner !== myPeerId && p2Owner !== myPeerId;
-                if (gameModeSelect.value === 'webxdc-tournament' && !iAmSpectator && (myPeerId !== p1Owner && myPeerId !== p2Owner)) {
+                const iAmSpectator = bothPlayersAssigned
+                    && !peerRepresentsLocalPlayer(p1Owner)
+                    && !peerRepresentsLocalPlayer(p2Owner);
+                if (gameModeSelect.value === 'webxdc-tournament' && !iAmSpectator && !peerRepresentsLocalPlayer(p1Owner) && !peerRepresentsLocalPlayer(p2Owner)) {
                     alert("Waiting for pairing.");
                     debugLog('MOVE_BLOCKED', { reason: 'tournament-waiting-for-pairing', myPeerId, p1Owner, p2Owner });
                     return;
@@ -2360,7 +2514,7 @@
                 }
 
                 const activePeerId = networkPlayers[currentPlayer];
-                if (activePeerId && activePeerId !== myPeerId) {
+                if (activePeerId && !peerRepresentsLocalPlayer(activePeerId)) {
                     alert("It is not your turn!");
                     debugLog('MOVE_BLOCKED', { reason: 'turn-owned-by-other-peer', currentPlayer, activePeerId, myPeerId });
                     return;
@@ -2436,21 +2590,20 @@
                 updateTurnIndicator();
                 startMoveTimerForCurrentTurn({ resetDeadline: true });
 
-                if (gameModeSelect.value === 'pve' && currentPlayer === 2 && !gameOver) {
-                    isComputerThinking = true;
-                    setTimeout(makeComputerMove, 400); 
-                }
+                maybeStartComputerTurn();
             }
         }
 
         // --- AI Logic ---
         function makeComputerMove() {
+            const aiPlayer = isComputerPlayer(1) ? 1 : 2;
+            const humanPlayer = aiPlayer === 1 ? 2 : 1;
             let bestScore = -1; let bestMoves = [];
             for (let r = 0; r < boardSize; r++) {
                 for (let c = 0; c < boardSize; c++) {
                     if (board[r][c] === 0) {
-                        let scoreAI = evaluatePosition(r, c, 2); 
-                        let scoreHuman = evaluatePosition(r, c, 1);
+                        let scoreAI = evaluatePosition(r, c, aiPlayer); 
+                        let scoreHuman = evaluatePosition(r, c, humanPlayer);
                         let totalScore = scoreAI + (scoreHuman * 0.95); 
                         if (totalScore > bestScore) { bestScore = totalScore; bestMoves = [{r, c}]; } 
                         else if (totalScore === bestScore) { bestMoves.push({r, c}); }
@@ -2522,7 +2675,7 @@
                 {
                     id: `game-end:${winnerPeerId || 'unknown'}:${countMoves(board)}`,
                     at: Date.now(),
-                    broadcast: isWebxdcNetworkMode() && winnerPeerId === myPeerId
+                    broadcast: isWebxdcNetworkMode() && peerRepresentsLocalPlayer(winnerPeerId)
                 }
             );
             if (gameModeSelect.value === 'webxdc-tournament') {
@@ -2531,7 +2684,7 @@
                 startFireworks();
             }
 
-            if (isWebxdcNetworkMode() && window.webxdc && networkPlayers[player] === myPeerId) {
+            if (isWebxdcNetworkMode() && window.webxdc && peerRepresentsLocalPlayer(networkPlayers[player])) {
                 sendXdcUpdate(
                     { action: 'WIN' },
                     `${myName} won the game!`,
@@ -2549,7 +2702,9 @@
                 : (name || (currentPlayer === 1 ? 'Black' : 'White')).replace(/\(.*\)/, '').trim();
             
             if (gameModeSelect.value === 'pve') {
-                const localName = currentPlayer === 1 ? cleanPlayerName(p1NameInput.value) : 'Computer';
+                const localName = isComputerPlayer(currentPlayer)
+                    ? 'Computer'
+                    : cleanPlayerName(currentPlayer === 1 ? p1NameInput.value : p2NameInput.value);
                 turnIndicator.innerHTML = `Current Turn: ${localName} ${color}`;
             } else if (gameModeSelect.value === 'webxdc-tournament') {
                 const activePair = networkPlayers[1] && networkPlayers[2];
@@ -2572,7 +2727,7 @@
                 && !networkPlayers[currentPlayer]
             ) {
                 turnIndicator.innerHTML = `Current Turn: Waiting for ${color} player to join/move`;
-            } else if (gameModeSelect.value === 'webxdc' && networkPlayers[currentPlayer] === myPeerId) {
+            } else if (gameModeSelect.value === 'webxdc' && peerRepresentsLocalPlayer(networkPlayers[currentPlayer])) {
                 turnIndicator.innerHTML = `Current Turn: <strong>You</strong> ${color}`;
             } else {
                 turnIndicator.innerHTML = `Current Turn: ${activeName} ${color}`;
@@ -2590,7 +2745,11 @@
                 startTournamentCountdown();
                 updateTournamentMatchState(0);
             }
-            initBoard(true);
+            initBoard(true, {
+                webxdcSeatSeed: gameModeSelect.value === 'webxdc' ? createSeatSeed() : null,
+                webxdcParticipants: gameModeSelect.value === 'webxdc' ? getCurrentWebxdcGameParticipants() : null,
+                pveSeatSeed: gameModeSelect.value === 'pve' ? createSeatSeed() : null
+            });
         });
         menuActionsSelect.addEventListener('change', (e) => {
             if (e.target.value === 'debug-logs') showDebugPanel();

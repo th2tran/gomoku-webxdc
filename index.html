@@ -1266,9 +1266,16 @@
             if (senderPeerId) {
                 rememberConnectedPlayer(senderPeerId, senderName, senderAddr);
             }
-            if (payload.action !== 'PRESENCE' && payload.action !== 'LEAVE' && payload.action !== 'WITHDRAWAL' && isNewPeer && !alreadyNotifiedJoin && !isRecentJoinDuplicate) {
-                const joinDedupeSource = senderAddr || senderPeerId || cleanPlayerName(senderName).toLowerCase();
-                addNotification(`${cleanPlayerName(senderName)} joined the game.`, {
+            const isRosterSyncAction = payload.action === 'PEER_LIST_REQUEST' || payload.action === 'PEER_LIST_SYNC';
+            const shouldNotifyJoin = (
+                payload.action === 'JOIN'
+                || (payload.action === 'PRESENCE' && !isRosterSyncAction)
+                || (!isRosterSyncAction && payload.action !== 'PRESENCE' && payload.action !== 'LEAVE' && payload.action !== 'WITHDRAWAL' && isNewPeer)
+            ) && !alreadyNotifiedJoin && !isRecentJoinDuplicate;
+            if (shouldNotifyJoin) {
+                const joinDisplayName = cleanPlayerName(senderName || payload.name || 'Player');
+                const joinDedupeSource = senderAddr || senderPeerId || joinDisplayName.toLowerCase();
+                addNotification(`${joinDisplayName} joined the game.`, {
                     id: `join-detected:${senderPeerId}:${payload.msgId || Date.now()}`,
                     at: Date.now(),
                     dedupeKey: `join:${joinDedupeSource}`,
@@ -1279,7 +1286,7 @@
                 recentJoinAtByIdentity.set(joinIdentity, Date.now());
             }
 
-            if (isLive && isNewPeer && payload.action !== 'PRESENCE') {
+            if (isLive && isNewPeer && !isRosterSyncAction && payload.action !== 'PRESENCE') {
                 debugLog('PRESENCE_REPLY_TRIGGERED', {
                     reason: 'new live peer update',
                     action: payload.action || null,
@@ -1287,6 +1294,7 @@
                 });
                 announcePresence('PRESENCE');
                 broadcastStateSync('new-peer-detected');
+                sendPeerListSync('new-peer-detected');
             }
 
             if (payload.action === 'NOTIFY') {
@@ -1302,6 +1310,18 @@
 
             if (payload.action === 'LEAVE') {
                 applyPeerLeft(payload.leftPeerId, 'remote-update', payload.leaveEventId, payload.noteText);
+                return;
+            }
+
+            if (payload.action === 'PEER_LIST_REQUEST') {
+                if (senderPeerId && senderPeerId !== myPeerId) {
+                    sendPeerListSync('response');
+                }
+                return;
+            }
+
+            if (payload.action === 'PEER_LIST_SYNC') {
+                applyPeerListSync(payload, senderPeerId, senderAddr);
                 return;
             }
 
@@ -1491,12 +1511,13 @@
             }
         }
 
-        function rememberConnectedPlayer(peerId, name, addr = null) {
+        function rememberConnectedPlayer(peerId, name, addr = null, options = {}) {
             if (!peerId) {
                 debugLog('CONNECTED_PLAYER_SKIPPED', { reason: 'missing peerId', name: name || null, addr: addr || null });
                 return;
             }
 
+            const refreshLastSeen = options.refreshLastSeen !== false;
             const normalizedAddr = normalizeAddr(addr);
             const canonicalPeerId = getCanonicalPeerId(peerId, normalizedAddr);
             if (!canonicalPeerId) {
@@ -1533,7 +1554,7 @@
             connectedPlayers[canonicalPeerId] = {
                 addr: normalizedAddr || existingEntry.addr || null,
                 name: name || existingEntry.name || 'Player',
-                lastSeen: Date.now()
+                lastSeen: refreshLastSeen ? Date.now() : (Number.isFinite(existingEntry.lastSeen) ? existingEntry.lastSeen : Date.now())
             };
             ensurePlayerScoreEntry(canonicalPeerId);
             debugLog('CONNECTED_PLAYER_RECORDED', {
@@ -1542,15 +1563,13 @@
                 addr: connectedPlayers[canonicalPeerId].addr,
                 name: connectedPlayers[canonicalPeerId].name,
                 wasKnown,
+                refreshLastSeen,
                 totalConnected: Object.keys(connectedPlayers).length
             });
             updateConnectionIndicator();
             updateAllPlayersScoreboard();
             updateModeSelectState();
             if (gameModeSelect.value === 'webxdc-tournament') {
-                // Only call updateTournamentMatchState for genuinely new peers or when the tournament
-                // hasn't started yet (no schedule). Calling it on every PRESENCE heartbeat for
-                // already-known peers can interfere with active match seat assignment and timers.
                 const tournamentNotStarted = !tournamentState.schedule.length || !networkPlayers[1] || !networkPlayers[2];
                 if (!wasKnown || tournamentNotStarted) {
                     updateTournamentMatchState();
@@ -1634,6 +1653,114 @@
                 gameMode: gameModeSelect.value,
                 count,
                 peerIds: Object.keys(connectedPlayers)
+            });
+        }
+
+        function buildPeerRosterSnapshot() {
+            const byKey = new Map();
+            const addEntry = (peerId, name, addr) => {
+                if (!peerId || !peerId.trim()) return;
+                const canonicalId = peerId.trim();
+                const normalizedAddr = normalizeAddr(addr);
+                const existing = byKey.get(canonicalId);
+                byKey.set(canonicalId, {
+                    peerId: canonicalId,
+                    name: typeof name === 'string' && name.trim() ? name.trim() : (existing?.name || 'Player'),
+                    addr: normalizedAddr || existing?.addr || null
+                });
+            };
+
+            addEntry(myPeerId, myName, myAddr);
+            for (const [peerId, record] of Object.entries(connectedPlayers)) {
+                addEntry(peerId, record?.name, record?.addr);
+            }
+
+            return Array.from(byKey.values()).map(({ peerId, name, addr }) => ({
+                peerId,
+                name,
+                addr: normalizeAddr(addr) || null
+            }));
+        }
+
+        function requestPeerListSync(reason = 'startup') {
+            if (!window.webxdc || (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament')) return;
+            const payload = {
+                action: 'PEER_LIST_REQUEST',
+                requesterPeerId: myPeerId,
+                addr: myAddr,
+                name: myName,
+                peerId: myPeerId,
+                reason
+            };
+            sendXdcUpdate(payload, '', `${myName} is requesting a peer roster sync.`);
+            debugLog('PEER_LIST_REQUEST_SENT', { reason, requesterPeerId: myPeerId });
+        }
+
+        function formatPeerRosterNames(peers, maxNames = 4) {
+            const names = Array.isArray(peers) ? peers
+                .map((peer) => {
+                    if (!peer || typeof peer !== 'object') return null;
+                    const name = typeof peer.name === 'string' && peer.name.trim() ? peer.name.trim() : null;
+                    const peerId = typeof peer.peerId === 'string' && peer.peerId.trim() ? peer.peerId.trim() : null;
+                    return name || (peerId ? `Player ${peerId.slice(0, 8)}` : null);
+                })
+                .filter(Boolean)
+                .filter((name, index, arr) => arr.indexOf(name) === index)
+                .slice(0, maxNames) : [];
+            if (!names.length) return null;
+            if (names.length === 1) return names[0];
+            if (names.length === 2) return `${names[0]} and ${names[1]}`;
+            return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
+        }
+
+        function sendPeerListSync(reason = 'startup') {
+            if (!window.webxdc || (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament')) return;
+            const peers = buildPeerRosterSnapshot();
+            const payload = {
+                action: 'PEER_LIST_SYNC',
+                peers,
+                addr: myAddr,
+                name: myName,
+                peerId: myPeerId,
+                reason
+            };
+            const rosterSummary = formatPeerRosterNames(peers.filter((peer) => peer.peerId !== myPeerId));
+            sendXdcUpdate(payload, '', `${myName} synced the peer roster.`);
+            if (rosterSummary) {
+                addNotification(`Peer roster synced: ${rosterSummary}.`, {
+                    id: `peer-sync-send:${myPeerId}:${reason}:${Date.now()}`,
+                    at: Date.now(),
+                    broadcast: false
+                });
+            }
+            debugLog('PEER_LIST_SYNC_SENT', { reason, count: payload.peers.length, peers: rosterSummary || 'none' });
+        }
+
+        function applyPeerListSync(payload, sourcePeerId = null, sourceAddr = null) {
+            const peers = Array.isArray(payload?.peers) ? payload.peers : [];
+            if (!peers.length) return;
+            for (const peer of peers) {
+                if (!peer || typeof peer.peerId !== 'string' || !peer.peerId.trim()) continue;
+                const peerId = peer.peerId.trim();
+                if (peerId === myPeerId) continue;
+                const peerAddr = normalizeAddr(peer.addr) || normalizeAddr(sourceAddr) || null;
+                rememberConnectedPlayer(peerId, peer.name || 'Player', peerAddr || null, { refreshLastSeen: false });
+            }
+            if (sourcePeerId && sourcePeerId !== myPeerId) {
+                rememberConnectedPlayer(sourcePeerId, payload?.name || 'Player', normalizeAddr(sourceAddr) || null, { refreshLastSeen: false });
+            }
+            const rosterSummary = formatPeerRosterNames(peers.filter((peer) => peer.peerId !== myPeerId));
+            if (rosterSummary) {
+                addNotification(`Peer roster synced from ${cleanPlayerName(payload?.name || sourcePeerId || 'peer')}: ${rosterSummary}.`, {
+                    id: `peer-sync-recv:${sourcePeerId || 'unknown'}:${payload?.reason || 'sync'}:${Date.now()}`,
+                    at: Date.now(),
+                    broadcast: false
+                });
+            }
+            debugLog('PEER_LIST_SYNC_APPLIED', {
+                sourcePeerId: sourcePeerId || null,
+                peerCount: peers.length,
+                peers: rosterSummary || 'none'
             });
         }
 
@@ -2552,6 +2679,11 @@
         startRealtimeChannel();
         startPresenceSync();
         startPlayerExitMonitor();
+        setTimeout(() => {
+            if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
+            requestPeerListSync('startup');
+            sendPeerListSync('startup');
+        }, 1000);
         window.addEventListener('pagehide', () => broadcastLocalLeave('pagehide'));
         window.addEventListener('beforeunload', () => broadcastLocalLeave('beforeunload'));
         setTimeout(() => {

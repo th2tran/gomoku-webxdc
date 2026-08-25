@@ -802,6 +802,7 @@
             const noteText = `Game started: ${p1Name} (Black) vs ${p2Name} (White).`;
             const noteId = `game-start:${p1Owner}:${p2Owner}:${countMoves(board)}`;
             addNotification(noteText, { id: noteId, at: Date.now(), broadcast: true });
+            playGameStartSound();
             gameStartAnnounced = true;
             debugLog('GAME_START_ANNOUNCED', { source, p1Owner, p2Owner });
         }
@@ -816,6 +817,7 @@
                 at: Date.now(),
                 broadcast: false
             });
+            playGameStartSound();
             gameStartAnnounced = true;
             debugLog('GAME_START_ANNOUNCED', { source, p1Owner: null, p2Owner: null });
         }
@@ -1210,6 +1212,7 @@
                     broadcast: source === 'local-timeout' && isWebxdcNetworkMode()
                 }
             );
+            playWinSound();
             if (gameModeSelect.value === 'webxdc-tournament') {
                 advanceTournamentMatch(winnerPeerId || networkPlayers[winnerPlayer] || null);
             }
@@ -1348,6 +1351,7 @@
                 at: Date.now(),
                 broadcast: source === 'local-detection' || gameModeSelect.value === 'webxdc-tournament'
             });
+            playWinSound();
             if (gameModeSelect.value === 'webxdc-tournament') {
                 advanceTournamentMatch(winnerPeerId);
             }
@@ -2786,6 +2790,7 @@
             
             const cell = document.querySelector(`.cell[data-row="${r}"][data-col="${c}"]`);
             cell.appendChild(piece);
+            playMoveSound();
 
             if (checkWin(r, c, currentPlayer)) {
                 gameOver = true;
@@ -2885,6 +2890,7 @@
                     broadcast: isWebxdcNetworkMode() && peerRepresentsLocalPlayer(winnerPeerId)
                 }
             );
+            playWinSound();
             if (gameModeSelect.value === 'webxdc-tournament') {
                 advanceTournamentMatch(winnerPeerId || networkPlayers[player] || null);
             } else {
@@ -3116,28 +3122,74 @@
         let jubilationAudioContext = null;
         function playTournamentJubilationSound() {
             try {
-                const AudioCtor = window.AudioContext || window.webkitAudioContext;
-                if (!AudioCtor) return;
-                if (!jubilationAudioContext) jubilationAudioContext = new AudioCtor();
-                const context = jubilationAudioContext;
+                const context = getGomokuAudioContext();
+                if (!context) return;
                 const notes = [392, 523.25, 659.25, 783.99];
                 notes.forEach((frequency, index) => {
-                    const oscillator = context.createOscillator();
-                    const gain = context.createGain();
-                    oscillator.type = 'triangle';
-                    oscillator.frequency.value = frequency;
-                    gain.gain.value = 0.0001;
-                    oscillator.connect(gain);
-                    gain.connect(context.destination);
-                    const startAt = context.currentTime + (index * 0.15);
-                    oscillator.start(startAt);
-                    gain.gain.exponentialRampToValueAtTime(0.08, startAt + 0.04);
-                    gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.55);
-                    oscillator.stop(startAt + 0.6);
+                    playTone(context, frequency, 0.12, 'triangle', 0.08, index * 0.15);
                 });
             } catch (err) {
                 console.warn('Gomoku: could not play tournament sound', err);
             }
+        }
+
+        let gomokuAudioContext = null;
+        function getGomokuAudioContext() {
+            try {
+                const AudioCtor = window.AudioContext || window.webkitAudioContext;
+                if (!AudioCtor) return null;
+                if (!gomokuAudioContext) gomokuAudioContext = new AudioCtor();
+                if (gomokuAudioContext.state === 'suspended') {
+                    gomokuAudioContext.resume().catch(() => {});
+                }
+                return gomokuAudioContext;
+            } catch (err) {
+                console.warn('Gomoku: could not initialize audio', err);
+                return null;
+            }
+        }
+
+        function playTone(context, frequency, durationSeconds, waveType = 'sine', volume = 0.06, startOffsetSeconds = 0) {
+            if (!context) return;
+            const oscillator = context.createOscillator();
+            const gain = context.createGain();
+            oscillator.type = waveType;
+            oscillator.frequency.value = frequency;
+            gain.gain.value = 0.0001;
+            oscillator.connect(gain);
+            gain.connect(context.destination);
+            const startAt = context.currentTime + startOffsetSeconds;
+            oscillator.start(startAt);
+            gain.gain.exponentialRampToValueAtTime(volume, startAt + 0.03);
+            gain.gain.exponentialRampToValueAtTime(0.0001, startAt + durationSeconds);
+            oscillator.stop(startAt + durationSeconds + 0.03);
+        }
+
+        function playGameStartSound() {
+            const context = getGomokuAudioContext();
+            if (!context) return;
+            playTone(context, 523.25, 0.12, 'triangle', 0.08, 0);
+            playTone(context, 659.25, 0.12, 'triangle', 0.08, 0.12);
+            playTone(context, 783.99, 0.16, 'triangle', 0.09, 0.24);
+        }
+
+        function playMoveSound() {
+            const context = getGomokuAudioContext();
+            if (!context) return;
+            playTone(context, currentPlayer === 1 ? 220 : 330, 0.06, 'sine', 0.03, 0);
+        }
+
+        function playWinSound() {
+            const context = getGomokuAudioContext();
+            if (!context) return;
+            playTone(context, 523.25, 0.14, 'triangle', 0.08, 0);
+            playTone(context, 659.25, 0.14, 'triangle', 0.08, 0.14);
+            playTone(context, 783.99, 0.18, 'triangle', 0.09, 0.28);
+            playTone(context, 1046.5, 0.24, 'triangle', 0.1, 0.46);
+        }
+
+        function primeAudioContext() {
+            getGomokuAudioContext();
         }
 
         // Boot
@@ -3164,6 +3216,8 @@
         window.addEventListener('pagehide', () => triggerLocalLeave('pagehide'));
         window.addEventListener('beforeunload', () => triggerLocalLeave('beforeunload'));
         window.addEventListener('unload', () => triggerLocalLeave('unload'));
+        document.addEventListener('pointerdown', primeAudioContext, { once: true, passive: true });
+        document.addEventListener('keydown', primeAudioContext, { once: true });
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'hidden') {
                 triggerLocalLeave('visibilitychange');

@@ -91,6 +91,27 @@
         .all-players-scoreboard .score-row .score-value {
             font-weight: bold;
         }
+        .current-match-panel {
+            width: 100%;
+            max-width: 600px;
+            margin: 0 0 14px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .current-match-meta {
+            padding: 10px 12px;
+            background: #34495e;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            color: #f1c40f;
+            font-size: 15px;
+            font-weight: 700;
+            text-align: center;
+        }
+        .current-match-panel .dashboard {
+            margin-bottom: 0;
+        }
 
         #board {
             display: grid;
@@ -410,18 +431,21 @@
 
     <h1 id="title">Let's Gomoku!</h1>
 
-    <div class="dashboard">
-        <div class="player-info">
-            <input type="text" id="p1-name" value="Waiting for P1 (Black)">
-        </div>
-        <div class="player-info">
-            <input type="text" id="p2-name" value="Waiting for P2 (White)">
-        </div>
-    </div>
-
     <div class="all-players-scoreboard" id="all-players-scoreboard">
         <h3>Players Scoreboard</h3>
         <div class="score-row"><span class="score-name">No players yet</span><span class="score-value">0</span></div>
+    </div>
+
+    <div class="current-match-panel">
+        <div class="current-match-meta" id="current-match-meta">Current Match</div>
+        <div class="dashboard">
+            <div class="player-info">
+                <input type="text" id="p1-name" value="Waiting for P1 (Black)">
+            </div>
+            <div class="player-info">
+                <input type="text" id="p2-name" value="Waiting for P2 (White)">
+            </div>
+        </div>
     </div>
 
     <div class="turn-indicator" id="turn-indicator">Current Turn: Waiting for P1 (Black)</div>
@@ -497,6 +521,7 @@
 
         const boardElement = document.getElementById('board');
         const allPlayersScoreboard = document.getElementById('all-players-scoreboard');
+        const currentMatchMetaEl = document.getElementById('current-match-meta');
         const turnIndicator = document.getElementById('turn-indicator');
         const moveTimerEl = document.getElementById('move-timer');
         const p1NameInput = document.getElementById('p1-name');
@@ -548,13 +573,19 @@
         let pveComputerPlayer = 2;
         const playerStaleMs = 15000;
         const knownLeftPeers = new Set();
+        // Old session peerIds that refer to us (collected from incoming PEER_LIST_SYNC entries
+        // whose addr === myAddr but peerId !== myPeerId). Needed so we can recognise ourselves
+        // in tournament schedules built by peers who still remember our previous canonical ID.
+        const selfAliases = new Set();
         const canonicalPeerIdByAddr = new Map();
         let localLeaveBroadcastSent = false;
+        let tournamentResetPendingTimer = null;
         const moveTimeLimitMs = 30000;
         let turnDeadlineTs = null;
         let moveTimerInterval = null;
         let timeoutResolutionInFlight = false;
         const tournamentPlayerAddrLock = new Map(); // addr → peerId: first device that claimed a tournament slot for that addr
+        const tournamentDurationMs = 60 * 60 * 1000;
         const tournamentState = {
             enabled: false,
             pairIndex: 0,
@@ -564,8 +595,13 @@
             finished: false,
             winCounts: {},
             seatSeed: null,
+            deadlineTs: null,
+            cycle: 0,
+            expiryNotified: false,
             countdownDeadlineTs: null,
-            countdownTimer: null
+            countdownTimer: null,
+            clockTimer: null,
+            matchNumber: 1
         };
 
         function getChatInstanceInfo() {
@@ -787,8 +823,8 @@
             presenceSyncTimer = setInterval(() => {
                 if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
                 announcePresence('PRESENCE');
-            }, 15000);
-            debugLog('PRESENCE_SYNC_STARTED', { intervalMs: 15000 });
+            }, 10000);
+            debugLog('PRESENCE_SYNC_STARTED', { intervalMs: 10000 });
         }
 
         function maybeAnnounceGameStart(source = 'unknown') {
@@ -822,6 +858,34 @@
             debugLog('GAME_START_ANNOUNCED', { source, p1Owner: null, p2Owner: null });
         }
 
+        function updateCurrentMatchDisplay() {
+            if (!currentMatchMetaEl) return;
+            if (gameModeSelect.value === 'webxdc-tournament') {
+                const matchNumber = Number.isInteger(tournamentState.matchNumber) && tournamentState.matchNumber > 0
+                    ? tournamentState.matchNumber
+                    : 1;
+                currentMatchMetaEl.textContent = `Tournament Match #${matchNumber}`;
+                return;
+            }
+            if (gameModeSelect.value === 'webxdc') {
+                currentMatchMetaEl.textContent = 'Current Match: Network 2-Player';
+                return;
+            }
+            if (gameModeSelect.value === 'pve') {
+                currentMatchMetaEl.textContent = 'Current Match: Local vs Computer';
+                return;
+            }
+            if (gameModeSelect.value === 'pvp') {
+                currentMatchMetaEl.textContent = 'Current Match: Local Pass & Play';
+                return;
+            }
+            currentMatchMetaEl.textContent = 'Current Match';
+        }
+
+        function updateTournamentMatchDisplay() {
+            updateCurrentMatchDisplay();
+        }
+
         function getCanonicalPeerId(peerId, addr = null) {
             const normalizedAddr = normalizeAddr(addr);
             if (normalizedAddr) {
@@ -837,9 +901,16 @@
         }
 
         function buildTournamentSchedule() {
-            const peers = [...new Set([myPeerId, ...Object.keys(connectedPlayers)])]
+            // Use our canonical ID as known by peers — if we've rejoined with a new random
+            // peerId, other peers still know us by our old canonical (recorded in selfAliases).
+            let myEffectiveId = myPeerId;
+            if (selfAliases.size > 0) {
+                for (const alias of selfAliases) myEffectiveId = alias; // last-inserted alias
+            }
+            const peers = [...new Set([myEffectiveId, ...Object.keys(connectedPlayers)])]
                 .map((peerId) => {
-                    const record = peerId === myPeerId ? { addr: myAddr } : connectedPlayers[peerId];
+                    if (peerId === myEffectiveId) return myEffectiveId;
+                    const record = connectedPlayers[peerId];
                     return getCanonicalPeerId(peerId, record?.addr || null);
                 })
                 .filter((peerId, index, arr) => peerId && arr.indexOf(peerId) === index);
@@ -867,22 +938,64 @@
             return `${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
         }
 
-        function getTournamentSeatAssignment(pair, pairIndex, seatSeed = null) {
+        // Return the network addr for a peerId so seat-assignment hashing is consistent
+        // across devices that may have different canonical peerIds for the same player.
+        function getAddrForPeer(peerId) {
+            if (!peerId) return null;
+            if (peerId === myPeerId || selfAliases.has(peerId)) return normalizeAddr(myAddr);
+            return normalizeAddr(connectedPlayers[peerId]?.addr) || null;
+        }
+
+        function getTournamentSeatAssignment(pair, pairIndex, seatSeed = null, matchNumber = 0) {
             if (!Array.isArray(pair) || pair.length < 2) return [pair?.[0] || null, pair?.[1] || null];
             if (!seatSeed) {
                 return Math.random() < 0.5 ? [...pair] : [pair[1], pair[0]];
             }
-            const hashInput = `${seatSeed}:${Number.isInteger(pairIndex) ? pairIndex : 0}:${pair[0]}|${pair[1]}`;
+            // Sort by ADDR (not peerId) so the hash is identical on every device, even when
+            // peers are tracked under different canonical peerIds (e.g. after a rejoin with a
+            // new random session ID). Fall back to the peerId string if addr is unavailable.
+            const addr0 = getAddrForPeer(pair[0]) || pair[0];
+            const addr1 = getAddrForPeer(pair[1]) || pair[1];
+            const [hashA, hashB, peerA, peerB] = addr0 <= addr1
+                ? [addr0, addr1, pair[0], pair[1]]
+                : [addr1, addr0, pair[1], pair[0]];
+            const hashInput = `${seatSeed}:${Number.isInteger(matchNumber) ? matchNumber : 0}:${hashA}|${hashB}`;
             let hash = 0;
             for (let i = 0; i < hashInput.length; i++) {
                 hash = ((hash * 31) + hashInput.charCodeAt(i)) >>> 0;
             }
-            return (hash % 2) === 0 ? [...pair] : [pair[1], pair[0]];
+            return (hash % 2) === 0 ? [peerA, peerB] : [peerB, peerA];
         }
 
         function getTournamentPairings() {
-            if (!tournamentState.schedule.length) {
-                tournamentState.schedule = buildTournamentSchedule();
+            const activeMatchInProgress = !gameOver && !!networkPlayers[1] && !!networkPlayers[2];
+            if (activeMatchInProgress && Array.isArray(tournamentState.schedule) && tournamentState.schedule.length) {
+                if (!Number.isInteger(tournamentState.pairIndex) || tournamentState.pairIndex < 0) {
+                    tournamentState.pairIndex = 0;
+                }
+                if (tournamentState.pairIndex >= tournamentState.schedule.length) {
+                    tournamentState.pairIndex = 0;
+                }
+                return tournamentState.schedule;
+            }
+
+            const liveSchedule = buildTournamentSchedule();
+            const scheduleChanged = !Array.isArray(tournamentState.schedule)
+                || tournamentState.schedule.length !== liveSchedule.length
+                || liveSchedule.some((pair, index) => {
+                    const currentPair = tournamentState.schedule[index] || [];
+                    return currentPair.length !== pair.length
+                        || currentPair[0] !== pair[0]
+                        || currentPair[1] !== pair[1];
+                });
+            if (scheduleChanged) {
+                tournamentState.schedule = liveSchedule;
+                if (!Number.isInteger(tournamentState.pairIndex) || tournamentState.pairIndex < 0) {
+                    tournamentState.pairIndex = 0;
+                }
+                if (tournamentState.schedule.length && tournamentState.pairIndex >= tournamentState.schedule.length) {
+                    tournamentState.pairIndex = 0;
+                }
             }
             return tournamentState.schedule;
         }
@@ -948,6 +1061,20 @@
             debugLog('WEBXDC_SEATS_ASSIGNED', { seatSeed, pair, seatPair });
         }
 
+        function maybeAssignWebxdcSeatsForCurrentGame(reason = 'unknown', participants = null) {
+            if (gameModeSelect.value !== 'webxdc') return false;
+            if (countMoves(board) > 0 || gameOver) return false;
+            const pair = Array.isArray(participants) && participants.length
+                ? participants.filter(Boolean).slice(0, 2)
+                : getCurrentWebxdcGameParticipants();
+            if (pair.length < 2) return false;
+            assignWebxdcSeatsForNewGame(webxdcSeatSeed || createSeatSeed(), pair);
+            updateTournamentMatchDisplay();
+            updateTurnIndicator();
+            debugLog('WEBXDC_SEATS_REFRESHED', { reason, participants: pair, seatSeed: webxdcSeatSeed });
+            return true;
+        }
+
         function assignPveSeatsForNewGame(seatSeed = null) {
             const effectiveSeed = typeof seatSeed === 'string' && seatSeed ? seatSeed : null;
             const seatPair = effectiveSeed
@@ -981,6 +1108,10 @@
         function peerRepresentsLocalPlayer(peerId) {
             if (!peerId) return false;
             if (peerId === myPeerId) return true;
+            // Old canonical IDs we've learned from incoming PEER_LIST_SYNC entries whose
+            // addr === myAddr (e.g. after rejoin with a new random peerId, peers still
+            // broadcast our old canonical in their roster).
+            if (selfAliases.has(peerId)) return true;
             const myAddrNorm = normalizeAddr(myAddr);
             if (!myAddrNorm) return false;
             if (normalizeAddr(connectedPlayers[peerId]?.addr) === myAddrNorm) return true;
@@ -1001,15 +1132,29 @@
         }
 
         function updateTournamentMatchState(forcePairIndex = null) {
-            if (gameModeSelect.value !== 'webxdc-tournament') {
+            if (gameModeSelect.value !== 'webxdc-tournament' || tournamentState.finished) {
                 tournamentState.enabled = false;
+                if (tournamentState.clockTimer) {
+                    clearInterval(tournamentState.clockTimer);
+                    tournamentState.clockTimer = null;
+                }
                 return;
             }
             tournamentState.enabled = true;
+            const activeMatchInProgress = !gameOver && !!networkPlayers[1] && !!networkPlayers[2];
+            if (activeMatchInProgress) {
+                tournamentState.pairings = getTournamentPairings();
+                syncMyAssignedPlayer();
+                setNetworkPlayerLabels();
+                updateTournamentMatchDisplay();
+                return;
+            }
+
             tournamentState.pairings = getTournamentPairings();
             if (!tournamentState.pairings.length) {
                 networkPlayers = { 1: null, 2: null };
                 myAssignedPlayer = null;
+                updateTournamentMatchDisplay();
                 return;
             }
             const safeIndex = Number.isInteger(forcePairIndex)
@@ -1017,7 +1162,7 @@
                 : ((tournamentState.pairIndex || 0) % tournamentState.pairings.length);
             tournamentState.pairIndex = (safeIndex + tournamentState.pairings.length) % tournamentState.pairings.length;
             const pair = tournamentState.pairings[tournamentState.pairIndex];
-            const randomizedPair = getTournamentSeatAssignment(pair, tournamentState.pairIndex, tournamentState.seatSeed);
+            const randomizedPair = getTournamentSeatAssignment(pair, tournamentState.pairIndex, tournamentState.seatSeed, tournamentState.matchNumber);
             networkPlayers[1] = randomizedPair[0] || null;
             networkPlayers[2] = randomizedPair[1] || null;
             syncMyAssignedPlayer();
@@ -1027,6 +1172,7 @@
                 turnDeadlineTs = null;
                 stopMoveTimerInterval();
                 updateMoveTimerDisplay();
+                updateTournamentMatchDisplay();
                 return;
             }
             const matchKey = `${networkPlayers[1]}-${networkPlayers[2]}`;
@@ -1057,6 +1203,7 @@
                 seatSeed: tournamentState.seatSeed,
                 matchKey
             });
+            updateTournamentMatchDisplay();
         }
 
         function getTournamentStandings() {
@@ -1074,14 +1221,126 @@
             });
         }
 
+        function formatClockDuration(totalMs) {
+            const clampedMs = Math.max(0, Number.isFinite(totalMs) ? totalMs : 0);
+            const totalSec = Math.ceil(clampedMs / 1000);
+            const minutes = Math.floor(totalSec / 60);
+            const seconds = totalSec % 60;
+            return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+        }
+
+        function isTournamentClockExpired(atTs = Date.now()) {
+            return gameModeSelect.value === 'webxdc-tournament'
+                && tournamentState.enabled
+                && Number.isFinite(tournamentState.deadlineTs)
+                && atTs >= tournamentState.deadlineTs;
+        }
+
+        function getTournamentRemainingMs(atTs = Date.now()) {
+            if (!Number.isFinite(tournamentState.deadlineTs)) return null;
+            return Math.max(0, tournamentState.deadlineTs - atTs);
+        }
+
+        function currentTournamentResultCounts() {
+            return !isTournamentClockExpired(Date.now());
+        }
+
+        function maybeHandleTournamentExpiry() {
+            if (gameModeSelect.value !== 'webxdc-tournament' || !tournamentState.enabled || tournamentState.finished) {
+                return;
+            }
+            if (!isTournamentClockExpired(Date.now())) return;
+            if (!tournamentState.expiryNotified) {
+                tournamentState.expiryNotified = true;
+                addNotification('Tournament clock expired. Current match may finish, but its result will not count.', {
+                    id: `tournament-expired:${tournamentState.deadlineTs}`,
+                    at: Date.now(),
+                    broadcast: true
+                });
+            }
+            if (gameOver || !networkPlayers[1] || !networkPlayers[2]) {
+                finalizeTournament();
+            }
+        }
+
+        function getTournamentRosterPeers() {
+            const peers = [...new Set([myPeerId, ...Object.keys(connectedPlayers)])].filter(Boolean);
+            return peers.filter((peerId) => {
+                if (peerId === myPeerId) return true;
+                // Exclude entries that are no longer connected
+                if (!connectedPlayers[peerId]) return false;
+                // Exclude connectedPlayers entries that represent the local player under an old
+                // canonical peerId (e.g. after rejoin with a new random ID). Counting them would
+                // make the roster appear to have more players than actually present and prevent
+                // single-player finalization when everyone else has left.
+                if (peerRepresentsLocalPlayer(peerId)) return false;
+                return true;
+            });
+        }
+
+        function maybeFinalizeTournamentForSingleRemainingPlayer() {
+            if (gameModeSelect.value !== 'webxdc-tournament' || tournamentState.finished) return false;
+            const rosterPeers = getTournamentRosterPeers();
+            if (rosterPeers.length !== 1) return false;
+            const winnerPeerId = rosterPeers[0];
+            if (!winnerPeerId) return false;
+            tournamentState.enabled = false;
+            tournamentState.finished = true;
+            gameOver = true;
+            tournamentState.countdownDeadlineTs = null;
+            tournamentState.deadlineTs = null;
+            tournamentState.expiryNotified = true;
+            if (tournamentState.countdownTimer) {
+                clearInterval(tournamentState.countdownTimer);
+                tournamentState.countdownTimer = null;
+            }
+            if (tournamentState.clockTimer) {
+                clearInterval(tournamentState.clockTimer);
+                tournamentState.clockTimer = null;
+            }
+            ensurePlayerScoreEntry(winnerPeerId);
+            playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
+            const winnerName = displayNameForPeer(winnerPeerId);
+            turnIndicator.innerHTML = `🏆 Tournament Winner: <strong>${winnerName}</strong>`;
+            turnIndicator.style.color = '#f1c40f';
+            addNotification(`Tournament complete: ${winnerName} wins by default as the only remaining player.`, {
+                id: `tournament-single-player:${winnerPeerId}:${Date.now()}`,
+                at: Date.now(),
+                broadcast: true
+            });
+            updateAllPlayersScoreboard();
+            startFireworks();
+            playTournamentJubilationSound();
+            debugLog('TOURNAMENT_SINGLE_PLAYER_WINNER', { winnerPeerId, rosterPeers });
+            return true;
+        }
+
+        function startTournamentClockMonitor() {
+            if (tournamentState.clockTimer) return;
+            tournamentState.clockTimer = setInterval(() => {
+                if (gameModeSelect.value !== 'webxdc-tournament' || !tournamentState.enabled || tournamentState.finished) {
+                    clearInterval(tournamentState.clockTimer);
+                    tournamentState.clockTimer = null;
+                    return;
+                }
+                maybeHandleTournamentExpiry();
+                updateMoveTimerDisplay();
+            }, 1000);
+        }
+
         function finalizeTournament() {
             if (!tournamentState.enabled || tournamentState.finished) return;
             tournamentState.finished = true;
             tournamentState.enabled = false;
             tournamentState.countdownDeadlineTs = null;
+            tournamentState.deadlineTs = null;
             if (tournamentState.countdownTimer) {
                 clearInterval(tournamentState.countdownTimer);
                 tournamentState.countdownTimer = null;
+            }
+            if (tournamentState.clockTimer) {
+                clearInterval(tournamentState.clockTimer);
+                tournamentState.clockTimer = null;
             }
             const standings = getTournamentStandings();
             const topThree = standings.slice(0, 3);
@@ -1097,21 +1356,44 @@
                 broadcast: true
             });
             updateAllPlayersScoreboard();
+            updateTournamentMatchDisplay();
             startFireworks();
             playTournamentJubilationSound();
             debugLog('TOURNAMENT_FINISHED', { standings: topThree });
+            // Persist finished state to history so late-joining peers can replay it
+            if (window.webxdc) {
+                broadcastStateSync('tournament-finalized');
+            }
         }
 
         function advanceTournamentMatch(winnerPeerId) {
             if (gameModeSelect.value !== 'webxdc-tournament' || !tournamentState.enabled) return;
-            const nextIndex = tournamentState.pairIndex + 1;
-            if (nextIndex >= tournamentState.pairings.length) {
+            tournamentState.pairings = getTournamentPairings();
+            if (!Array.isArray(tournamentState.pairings) || !tournamentState.pairings.length) {
                 setTimeout(() => finalizeTournament(), 400);
                 return;
             }
-            tournamentState.pairIndex = nextIndex;
+            if (isTournamentClockExpired(Date.now())) {
+                setTimeout(() => finalizeTournament(), 400);
+                return;
+            }
+            const nextIndex = tournamentState.pairIndex + 1;
+            if (nextIndex >= tournamentState.pairings.length) {
+                tournamentState.pairIndex = 0;
+                tournamentState.cycle = (Number.isInteger(tournamentState.cycle) ? tournamentState.cycle : 0) + 1;
+            } else {
+                tournamentState.pairIndex = nextIndex;
+            }
+            tournamentState.matchNumber = (Number.isInteger(tournamentState.matchNumber) && tournamentState.matchNumber > 0
+                ? tournamentState.matchNumber
+                : 1) + 1;
             setTimeout(() => {
                 if (gameModeSelect.value !== 'webxdc-tournament') return;
+                tournamentState.pairings = getTournamentPairings();
+                if (isTournamentClockExpired(Date.now())) {
+                    finalizeTournament();
+                    return;
+                }
                 const nextPair = tournamentState.pairings[tournamentState.pairIndex];
                 if (!nextPair || !nextPair[0] || !nextPair[1]) return;
                 initBoard(false);
@@ -1119,6 +1401,10 @@
                 updateTurnIndicator();
                 startMoveTimerForCurrentTurn({ resetDeadline: true });
                 updateAllPlayersScoreboard();
+                updateTournamentMatchDisplay();
+                if (window.webxdc) {
+                    broadcastStateSync('tournament-next-match');
+                }
             }, 600);
         }
 
@@ -1151,33 +1437,39 @@
 
         function updateMoveTimerDisplay() {
             if (!moveTimerEl) return;
+            const tournamentRemainingMs = gameModeSelect.value === 'webxdc-tournament'
+                ? getTournamentRemainingMs(Date.now())
+                : null;
+            const tournamentText = Number.isFinite(tournamentRemainingMs)
+                ? ` • Tournament: ${formatClockDuration(tournamentRemainingMs)}`
+                : '';
             if (gameModeSelect.value === 'webxdc-tournament' && tournamentState.enabled && !tournamentState.finished && Number.isFinite(tournamentState.countdownDeadlineTs)) {
                 const remainingMs = Math.max(0, tournamentState.countdownDeadlineTs - Date.now());
                 const remainingSec = Math.ceil(remainingMs / 1000);
-                moveTimerEl.textContent = `Tournament starts in ${remainingSec}s`;
+                moveTimerEl.textContent = `Tournament starts in ${remainingSec}s${tournamentText}`;
                 moveTimerEl.style.color = remainingSec <= 5 ? '#ff7675' : '#c8d6e5';
                 return;
             }
             if (gameOver) {
-                moveTimerEl.textContent = 'Move Timer: --';
+                moveTimerEl.textContent = `Move Timer: --${tournamentText}`;
                 moveTimerEl.style.color = '#c8d6e5';
                 return;
             }
             if (!shouldRunMoveTimer()) {
                 moveTimerEl.textContent = gameModeSelect.value === 'webxdc'
                     ? 'Move Timer: waiting for active player'
-                    : 'Move Timer: --';
+                    : `Move Timer: --${tournamentText}`;
                 moveTimerEl.style.color = '#c8d6e5';
                 return;
             }
             if (!Number.isFinite(turnDeadlineTs)) {
-                moveTimerEl.textContent = 'Move Timer: 30s';
+                moveTimerEl.textContent = `Move Timer: 30s${tournamentText}`;
                 moveTimerEl.style.color = '#c8d6e5';
                 return;
             }
             const remainingMs = Math.max(0, turnDeadlineTs - Date.now());
             const remainingSec = Math.ceil(remainingMs / 1000);
-            moveTimerEl.textContent = `Move Timer: ${remainingSec}s`;
+            moveTimerEl.textContent = `Move Timer: ${remainingSec}s${tournamentText}`;
             moveTimerEl.style.color = remainingSec <= 5 ? '#ff7675' : remainingSec <= 10 ? '#f6c90e' : '#c8d6e5';
         }
 
@@ -1190,8 +1482,11 @@
 
             const winnerName = getPlayerDisplayName(winnerPlayer, winnerPeerId);
             const loserName = getPlayerDisplayName(loserPlayer, loserPeerId);
-            scores[currentPlayer]++;
-            if (winnerPeerId) {
+            const countForStandings = gameModeSelect.value !== 'webxdc-tournament' || currentTournamentResultCounts();
+            if (countForStandings) {
+                scores[currentPlayer]++;
+            }
+            if (winnerPeerId && countForStandings) {
                 ensurePlayerScoreEntry(winnerPeerId);
                 playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
             }
@@ -1212,6 +1507,13 @@
                     broadcast: source === 'local-timeout' && isWebxdcNetworkMode()
                 }
             );
+            if (!countForStandings && gameModeSelect.value === 'webxdc-tournament') {
+                addNotification('Tournament time expired during this match. Result not counted toward final standings.', {
+                    id: `tournament-uncounted-timeout:${winnerPeerId || winnerPlayer}:${loserPeerId || loserPlayer}:${countMoves(board)}`,
+                    at: Date.now(),
+                    broadcast: true
+                });
+            }
             playWinSound();
             if (gameModeSelect.value === 'webxdc-tournament') {
                 advanceTournamentMatch(winnerPeerId || networkPlayers[winnerPlayer] || null);
@@ -1253,6 +1555,7 @@
         }
 
         function tickMoveTimer() {
+            maybeHandleTournamentExpiry();
             if (gameOver || !shouldRunMoveTimer()) {
                 turnDeadlineTs = null;
                 stopMoveTimerInterval();
@@ -1290,6 +1593,8 @@
 
             const leaverName = displayNameForPeer(peerId);
             const leaverAddr = connectedPlayers[peerId]?.addr || null;
+            // Capture before clearing slots — needed to decide whether to advance the match
+            const wasActivePlayer = networkPlayers[1] === peerId || networkPlayers[2] === peerId;
             delete connectedPlayers[peerId];
             if (networkPlayers[1] === peerId) networkPlayers[1] = null;
             if (networkPlayers[2] === peerId) networkPlayers[2] = null;
@@ -1305,10 +1610,22 @@
                 at: Date.now(),
                 broadcast: false
             });
-            if (gameModeSelect.value === 'webxdc-tournament') {
-                updateTournamentMatchState();
+            if (gameModeSelect.value === 'webxdc-tournament' && !tournamentState.finished) {
+                const shouldResyncRoster = source !== 'peer-list-prune';
+                if (window.webxdc && shouldResyncRoster) {
+                    requestPeerListSync('tournament-leave');
+                    sendPeerListSync('tournament-leave');
+                }
+                maybeFinalizeTournamentForSingleRemainingPlayer();
+                // If the leaving peer was in an active match and it isn't over yet, skip —
+                // applyWithdrawalResult → advanceTournamentMatch will properly close and advance.
+                // Calling updateTournamentMatchState here would prematurely set up the next pairing
+                // before the current match result is recorded.
+                if (!wasActivePlayer || gameOver) {
+                    updateTournamentMatchState();
+                }
             }
-            debugLog('PEER_LEFT_APPLIED', { peerId, source });
+            debugLog('PEER_LEFT_APPLIED', { peerId, source, wasActivePlayer });
         }
 
         function applyWithdrawalResult(quitterPeerId, winnerPeerId, source = 'unknown') {
@@ -1333,9 +1650,12 @@
             stopMoveTimerInterval();
             const winnerName = displayNameForPeer(winnerPeerId);
             const quitterName = displayNameForPeer(quitterPeerId);
-            scores[winnerPlayer]++;
-            ensurePlayerScoreEntry(winnerPeerId);
-            playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
+            const countForStandings = gameModeSelect.value !== 'webxdc-tournament' || currentTournamentResultCounts();
+            if (countForStandings) {
+                scores[winnerPlayer]++;
+                ensurePlayerScoreEntry(winnerPeerId);
+                playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
+            }
             updateAllPlayersScoreboard();
             turnIndicator.innerHTML = `🏳️ <strong>${winnerName}</strong> wins by withdrawal`;
             turnIndicator.style.color = '#f1c40f';
@@ -1351,6 +1671,13 @@
                 at: Date.now(),
                 broadcast: source === 'local-detection' || gameModeSelect.value === 'webxdc-tournament'
             });
+            if (!countForStandings && gameModeSelect.value === 'webxdc-tournament') {
+                addNotification('Tournament time expired during this match. Result not counted toward final standings.', {
+                    id: `tournament-uncounted-withdrawal:${winnerPeerId}:${quitterPeerId || 'unknown'}:${countMoves(board)}`,
+                    at: Date.now(),
+                    broadcast: true
+                });
+            }
             playWinSound();
             if (gameModeSelect.value === 'webxdc-tournament') {
                 advanceTournamentMatch(winnerPeerId);
@@ -1362,7 +1689,19 @@
             if (playerExitMonitorTimer) return;
             playerExitMonitorTimer = setInterval(() => {
                 if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
+                maybeHandleTournamentExpiry();
                 const now = Date.now();
+
+                // During the tournament countdown window, suppress ALL peer-eviction checks.
+                // This gives every peer time to respond (PRESENCE/PEER_LIST_SYNC) after the
+                // reset so no one is falsely marked as stale/missing before they've had a
+                // chance to announce themselves. The countdown is typically 10 s — well within
+                // the normal 15 s stale threshold.
+                if (gameModeSelect.value === 'webxdc-tournament'
+                    && Number.isFinite(tournamentState.countdownDeadlineTs)
+                    && now < tournamentState.countdownDeadlineTs) {
+                    return;
+                }
 
                 const activePeerId = Number.isInteger(currentPlayer) && networkPlayers[currentPlayer]
                     ? networkPlayers[currentPlayer]
@@ -1391,7 +1730,7 @@
                 }
 
                 const stalePeers = Object.keys(connectedPlayers).filter((peerId) => {
-                    if (!peerId || peerId === myPeerId) return false;
+                    if (!peerId || peerId === myPeerId || peerRepresentsLocalPlayer(peerId)) return false;
                     const lastSeen = connectedPlayers[peerId]?.lastSeen;
                     if (!Number.isFinite(lastSeen)) return false;
                     return now - lastSeen > playerStaleMs && !knownLeftPeers.has(peerId);
@@ -1620,8 +1959,12 @@
                 rawUnderscoreSender: rawUpdate._sender || null
             });
 
-            if (senderPeerId) {
-                rememberConnectedPlayer(senderPeerId, senderName, senderAddr);
+            // Don't call rememberConnectedPlayer for LEAVE messages — doing so would refresh
+            // the leaver's lastSeen timestamp RIGHT BEFORE applyPeerLeft tries to evict them,
+            // which would reset stale detection and cause a 25s delay before the peer is
+            // actually removed if the canonical-ID resolution below fails.
+            if (senderPeerId && payload.action !== 'LEAVE') {
+                rememberConnectedPlayer(senderPeerId, senderName, senderAddr, { isLive });
             }
             const isRosterSyncAction = payload.action === 'PEER_LIST_REQUEST' || payload.action === 'PEER_LIST_SYNC';
             const shouldNotifyJoin = (
@@ -1666,7 +2009,12 @@
             }
 
             if (payload.action === 'LEAVE') {
-                applyPeerLeft(payload.leftPeerId, 'remote-update', payload.leaveEventId, payload.noteText);
+                // payload.leftPeerId is the leaver's CURRENT random session ID, but they may
+                // be stored under an OLD canonical ID (from a previous session). Resolve to
+                // canonical so connectedPlayers / networkPlayers are actually cleared.
+                const leaveAddr = normalizeAddr(payload.addr || senderAddr);
+                const canonicalLeftPeerId = getCanonicalPeerId(payload.leftPeerId, leaveAddr) || payload.leftPeerId;
+                applyPeerLeft(canonicalLeftPeerId, 'remote-update', payload.leaveEventId, payload.noteText);
                 return;
             }
 
@@ -1678,7 +2026,7 @@
             }
 
             if (payload.action === 'PEER_LIST_SYNC') {
-                applyPeerListSync(payload, senderPeerId, senderAddr);
+                applyPeerListSync(payload, senderPeerId, senderAddr, { isLive });
                 return;
             }
 
@@ -1689,6 +2037,14 @@
             if (payload.action === 'STATE') {
                 applyStatePayload(payload, meta);
             } else if (payload.action === 'TOURNAMENT_MODE') {
+                if (!isLive) {
+                    debugLog('TOURNAMENT_MODE_IGNORED_HISTORY', {
+                        source: meta.source || 'unknown',
+                        serial: meta.serial,
+                        maxSerial: meta.maxSerial
+                    });
+                    return;
+                }
                 if (payload.mode === 'webxdc-tournament') {
                     beginTournamentMode({
                         fromRemote: true,
@@ -1698,6 +2054,11 @@
                         countdownDeadlineTs: Number.isFinite(payload.countdownDeadlineTs)
                             ? payload.countdownDeadlineTs
                             : Date.now() + 10000,
+                        deadlineTs: Number.isFinite(payload.deadlineTs)
+                            ? payload.deadlineTs
+                            : Date.now() + tournamentDurationMs,
+                        cycle: Number.isInteger(payload.cycle) ? payload.cycle : 0,
+                        matchNumber: Number.isInteger(payload.matchNumber) && payload.matchNumber > 0 ? payload.matchNumber : 1,
                         broadcast: false
                     });
                 }
@@ -1736,7 +2097,11 @@
                 syncMyAssignedPlayer();
                 applyPieceLocally(payload.r, payload.c);
             } else if (payload.action === 'WITHDRAWAL') {
-                applyWithdrawalResult(payload.quitterPeerId, payload.winnerPeerId, 'remote-update');
+                // Resolve canonical IDs — quitter/winner may be stored under old canonical IDs
+                const withdrawalAddr = normalizeAddr(payload.addr || senderAddr);
+                const canonicalQuitter = getCanonicalPeerId(payload.quitterPeerId, withdrawalAddr) || payload.quitterPeerId;
+                const canonicalWinner = getCanonicalPeerId(payload.winnerPeerId, null) || payload.winnerPeerId;
+                applyWithdrawalResult(canonicalQuitter, canonicalWinner, 'remote-update');
             } else if (payload.action === 'TIMEOUT') {
                 applyMoveTimeoutResult({
                     loserPlayer: payload.loserPlayer === 2 ? 2 : 1,
@@ -1748,8 +2113,19 @@
             } else if (payload.action === 'RESET') {
                 const isTournamentReset = !!payload.tournamentReset || gameModeSelect.value === 'webxdc-tournament';
                 if (isTournamentReset) {
+                    if (!isLive) {
+                        debugLog('RESET_IGNORED_HISTORY', {
+                            source: meta.source || 'unknown',
+                            serial: meta.serial,
+                            maxSerial: meta.maxSerial
+                        });
+                        return;
+                    }
                     gameModeSelect.value = 'webxdc-tournament';
-                    resetTournamentProgress(typeof payload.seatSeed === 'string' && payload.seatSeed ? payload.seatSeed : createSeatSeed());
+                    resetTournamentProgress(
+                        typeof payload.seatSeed === 'string' && payload.seatSeed ? payload.seatSeed : createSeatSeed(),
+                        Number.isFinite(payload.tournamentDeadlineTs) ? payload.tournamentDeadlineTs : Date.now() + tournamentDurationMs
+                    );
                     startTournamentCountdown();
                     updateTournamentMatchState(0);
                 }
@@ -1939,10 +2315,24 @@
             updateConnectionIndicator();
             updateAllPlayersScoreboard();
             updateModeSelectState();
-            if (gameModeSelect.value === 'webxdc-tournament') {
+            maybeAssignWebxdcSeatsForCurrentGame('player-update');
+            if (gameModeSelect.value === 'webxdc-tournament' && !tournamentState.finished) {
                 const tournamentNotStarted = !tournamentState.schedule.length || !networkPlayers[1] || !networkPlayers[2];
-                if (!wasKnown || tournamentNotStarted) {
+                const activeMatchInProgress = !gameOver && !!networkPlayers[1] && !!networkPlayers[2];
+                const shouldKeepCurrentLiveMatch = activeMatchInProgress;
+                // Only update match state for live events — history replay must not drive pairings
+                if (options.isLive !== false && !shouldKeepCurrentLiveMatch && (!wasKnown || tournamentNotStarted)) {
                     updateTournamentMatchState();
+                } else if (options.isLive !== false && activeMatchInProgress && myAssignedPlayer === null) {
+                    // Active match running but we haven't identified our seat yet (e.g. rejoined
+                    // player whose old canonical peerId just appeared in connectedPlayers for the
+                    // first time). Re-sync seat identity and start the move timer if it's our turn.
+                    syncMyAssignedPlayer();
+                    if (myAssignedPlayer !== null) {
+                        setNetworkPlayerLabels();
+                        updateTurnIndicator();
+                        startMoveTimerForCurrentTurn({ resetDeadline: !Number.isFinite(turnDeadlineTs) });
+                    }
                 }
             }
         }
@@ -2040,8 +2430,15 @@
                 });
             };
 
-            addEntry(myPeerId, myName, myAddr);
+            // Do NOT include self (myPeerId) — the receiver already processes the sender
+            // via the top-level peerId/name/addr message fields. Including self here makes
+            // us appear in our own roster, causing the receiver to track our old canonical
+            // ID as a separate connected peer (especially after rejoin with a new random ID).
             for (const [peerId, record] of Object.entries(connectedPlayers)) {
+                // Skip any connectedPlayers entry that represents ourselves (old canonical ID
+                // from before a session restart). Sending it to peers would make them
+                // believe there is a second, unnamed player in the game.
+                if (peerRepresentsLocalPlayer(peerId)) continue;
                 addEntry(peerId, record?.name, record?.addr);
             }
 
@@ -2106,26 +2503,52 @@
             debugLog('PEER_LIST_SYNC_SENT', { reason, count: payload.peers.length, peers: rosterSummary || 'none' });
         }
 
-        function applyPeerListSync(payload, sourcePeerId = null, sourceAddr = null) {
+        function applyPeerListSync(payload, sourcePeerId = null, sourceAddr = null, meta = {}) {
+            if (meta.isLive === false) {
+                debugLog('PEER_LIST_SYNC_IGNORED_HISTORY', {
+                    sourcePeerId: sourcePeerId || null
+                });
+                return;
+            }
             const peers = Array.isArray(payload?.peers) ? payload.peers : [];
             if (!peers.length) return;
             const incomingPeerIds = new Set();
+            const myAddrNorm = normalizeAddr(myAddr);
             for (const peer of peers) {
                 if (!peer || typeof peer.peerId !== 'string' || !peer.peerId.trim()) continue;
                 const peerId = peer.peerId.trim();
                 if (peerId === myPeerId) continue;
+                // Skip peers we know have left — stale rosters from other peers must not
+                // resurrect a departed player, clear knownLeftPeers, or trigger match state updates.
+                if (knownLeftPeers.has(peerId)) continue;
+                // Never fall back to sourceAddr for third-party peers: that aliases multiple
+                // players to the sender identity and can wrongly mark active players as missing.
+                const peerAddr = normalizeAddr(peer.addr) || null;
+                // Skip entries whose addr matches ours — we appear in someone else's roster
+                // under our old canonical peerId (random per session). Adding this entry to our
+                // own connectedPlayers would cause the exit monitor to evict "ourselves" 15 s
+                // later (stale filter only checks peerId === myPeerId, not addr equality).
+                // BUT: remember the old canonical so peerRepresentsLocalPlayer() can identify
+                // us in tournament schedules built by peers who still know us by that old ID.
+                if (myAddrNorm && peerAddr && peerAddr === myAddrNorm) {
+                    if (peerId !== myPeerId) selfAliases.add(peerId);
+                    continue;
+                }
                 incomingPeerIds.add(peerId);
-                const peerAddr = normalizeAddr(peer.addr) || normalizeAddr(sourceAddr) || null;
-                rememberConnectedPlayer(peerId, peer.name || 'Player', peerAddr || null, { refreshLastSeen: false });
+                rememberConnectedPlayer(peerId, peer.name || 'Player', peerAddr || null, { refreshLastSeen: true, isLive: true });
             }
-            if (sourcePeerId && sourcePeerId !== myPeerId) {
+            if (sourcePeerId && sourcePeerId !== myPeerId && !knownLeftPeers.has(sourcePeerId)) {
                 incomingPeerIds.add(sourcePeerId);
-                rememberConnectedPlayer(sourcePeerId, payload?.name || 'Player', normalizeAddr(sourceAddr) || null, { refreshLastSeen: false });
+                rememberConnectedPlayer(sourcePeerId, payload?.name || 'Player', normalizeAddr(sourceAddr) || null, { refreshLastSeen: true, isLive: true });
             }
-            const missingPeers = Object.keys(connectedPlayers).filter((peerId) => {
-                if (!peerId || peerId === myPeerId) return false;
-                return !incomingPeerIds.has(peerId) && !knownLeftPeers.has(peerId);
-            });
+            const isTournamentMode = gameModeSelect.value === 'webxdc-tournament';
+            const allowTournamentPrune = isTournamentMode && tournamentState.finished;
+            const missingPeers = (isTournamentMode && !allowTournamentPrune)
+                ? []
+                : Object.keys(connectedPlayers).filter((peerId) => {
+                    if (!peerId || peerId === myPeerId) return false;
+                    return !incomingPeerIds.has(peerId) && !knownLeftPeers.has(peerId);
+                });
             for (const missingPeerId of missingPeers) {
                 const missingPeerName = displayNameForPeer(missingPeerId);
                 applyPeerLeft(missingPeerId, 'peer-list-prune', `leave:${missingPeerId}:${Date.now()}`, `${missingPeerName} left the game.`);
@@ -2143,6 +2566,16 @@
                     at: Date.now(),
                     broadcast: false
                 });
+            }
+            if (gameModeSelect.value === 'webxdc-tournament') {
+                syncMyAssignedPlayer();
+                updateTurnIndicator();
+                // Use startMoveTimerForCurrentTurn (not just updateMoveTimerDisplay) so that
+                // when this sync is what first resolves our local seat identity (e.g. player
+                // rejoined with a new random peerId and peer_xyz wasn't in connectedPlayers
+                // yet when TOURNAMENT_MODE arrived), the move timer interval actually starts.
+                startMoveTimerForCurrentTurn({ resetDeadline: !Number.isFinite(turnDeadlineTs) });
+                updateTournamentMatchDisplay();
             }
             debugLog('PEER_LIST_SYNC_APPLIED', {
                 sourcePeerId: sourcePeerId || null,
@@ -2258,7 +2691,10 @@
                         pairIndex: tournamentState.pairIndex,
                         finished: tournamentState.finished,
                         seatSeed: tournamentState.seatSeed,
-                        countdownDeadlineTs: tournamentState.countdownDeadlineTs
+                        countdownDeadlineTs: tournamentState.countdownDeadlineTs,
+                        deadlineTs: tournamentState.deadlineTs,
+                        cycle: tournamentState.cycle,
+                        matchNumber: tournamentState.matchNumber
                     }
                 }
             };
@@ -2278,7 +2714,11 @@
             );
             const incomingMoveCount = Number.isInteger(state.moveCount) ? state.moveCount : countMoves(normalizedBoard);
             const localMoveCount = countMoves(board);
-            if (incomingMoveCount < localMoveCount) {
+            // Allow finished-tournament states through even if board has fewer moves — the
+            // board is cleared between matches so move count is not a reliable freshness signal
+            // when the incoming state carries a tournament-completion transition.
+            const incomingIsFinished = !!state.tournamentState?.finished;
+            if (incomingMoveCount < localMoveCount && !incomingIsFinished) {
                 debugLog('STATE_SKIPPED', {
                     reason: 'older-than-local',
                     incomingMoveCount,
@@ -2304,10 +2744,12 @@
                 2: incomingNP[2] || networkPlayers[2] || null
             };
             syncMyAssignedPlayer();
-            if (state.gameMode === 'webxdc-tournament' || state.tournamentState?.enabled) {
+            if (state.gameMode === 'webxdc-tournament' || state.tournamentState?.enabled || state.tournamentState?.finished) {
                 gameModeSelect.value = 'webxdc-tournament';
-                tournamentState.enabled = true;
+                const wasFinished = tournamentState.finished;
                 tournamentState.finished = !!state.tournamentState?.finished;
+                // Use state's actual enabled value; never enable a finished tournament
+                tournamentState.enabled = tournamentState.finished ? false : !!state.tournamentState?.enabled;
                 tournamentState.pairIndex = Number.isInteger(state.tournamentState?.pairIndex) ? state.tournamentState.pairIndex : 0;
                 tournamentState.seatSeed = typeof state.tournamentState?.seatSeed === 'string' && state.tournamentState.seatSeed
                     ? state.tournamentState.seatSeed
@@ -2315,15 +2757,41 @@
                 tournamentState.countdownDeadlineTs = Number.isFinite(state.tournamentState?.countdownDeadlineTs)
                     ? state.tournamentState.countdownDeadlineTs
                     : null;
-                if (state.gameMode === 'webxdc-tournament') {
-                    // Only run seat assignment if at least one slot is still unset. When both slots
-                    // are already filled (active match), skip to avoid spurious re-randomization.
-                    if (!networkPlayers[1] || !networkPlayers[2]) {
-                        updateTournamentMatchState(tournamentState.pairIndex);
-                    } else {
-                        syncMyAssignedPlayer();
+                tournamentState.deadlineTs = Number.isFinite(state.tournamentState?.deadlineTs)
+                    ? state.tournamentState.deadlineTs
+                    : tournamentState.deadlineTs;
+                tournamentState.cycle = Number.isInteger(state.tournamentState?.cycle) && state.tournamentState.cycle >= 0
+                    ? state.tournamentState.cycle
+                    : tournamentState.cycle;
+                tournamentState.matchNumber = Number.isInteger(state.tournamentState?.matchNumber) && state.tournamentState.matchNumber > 0
+                    ? state.tournamentState.matchNumber
+                    : tournamentState.matchNumber;
+                tournamentState.expiryNotified = false;
+                // Only run side effects (seat assignment, timers) for live messages.
+                // Historical replay must not start timers or drive pairings — those old
+                // STATEs have expired deadlines and stale pair indices.
+                if (meta.isLive !== false) {
+                    if (!tournamentState.finished && state.gameMode === 'webxdc-tournament') {
+                        // Only run seat assignment if at least one slot is still unset. When both
+                        // slots are already filled (active match), skip to avoid re-randomization.
+                        if (!networkPlayers[1] || !networkPlayers[2]) {
+                            updateTournamentMatchState(tournamentState.pairIndex);
+                        } else {
+                            syncMyAssignedPlayer();
+                        }
+                    }
+                    if (!tournamentState.finished && Number.isFinite(tournamentState.countdownDeadlineTs)) {
+                        startTournamentCountdown();
+                    } else if (!tournamentState.finished) {
+                        startTournamentClockMonitor();
+                    }
+                    // Fire jubilation once when we transition into finished state
+                    if (tournamentState.finished && !wasFinished) {
+                        startFireworks();
+                        playTournamentJubilationSound();
                     }
                 }
+                updateModeSelectState();
             }
 
             if (typeof state.p1Name === 'string' && state.p1Name.trim()) p1NameInput.value = state.p1Name;
@@ -2363,6 +2831,7 @@
             startMoveTimerForCurrentTurn({ resetDeadline: !Number.isFinite(turnDeadlineTs) });
             updateConnectionIndicator();
             updateAllPlayersScoreboard();
+            maybeHandleTournamentExpiry();
             debugLog('STATE_APPLIED', {
                 source: meta.source || 'unknown',
                 incomingMoveCount,
@@ -2400,17 +2869,25 @@
             resetBtn.disabled = tournamentInProgress;
         }
 
-        function resetTournamentProgress(seatSeed = createSeatSeed()) {
+        function resetTournamentProgress(seatSeed = createSeatSeed(), deadlineTs = Date.now() + tournamentDurationMs) {
             tournamentState.enabled = true;
             tournamentState.finished = false;
             tournamentState.schedule = buildTournamentSchedule();
             tournamentState.pairIndex = 0;
             tournamentState.lastMatchKey = null;
             tournamentState.seatSeed = seatSeed;
+            tournamentState.deadlineTs = Number.isFinite(deadlineTs) ? deadlineTs : Date.now() + tournamentDurationMs;
+            tournamentState.cycle = 0;
+            tournamentState.matchNumber = 1;
+            tournamentState.expiryNotified = false;
             tournamentState.countdownDeadlineTs = Date.now() + 10000;
             if (tournamentState.countdownTimer) {
                 clearInterval(tournamentState.countdownTimer);
                 tournamentState.countdownTimer = null;
+            }
+            if (tournamentState.clockTimer) {
+                clearInterval(tournamentState.clockTimer);
+                tournamentState.clockTimer = null;
             }
             networkPlayers = { 1: null, 2: null };
             myAssignedPlayer = null;
@@ -2426,10 +2903,18 @@
             if (gameModeSelect.value !== 'webxdc-tournament') return;
             tournamentState.enabled = true;
             tournamentState.finished = false;
-            tournamentState.schedule = buildTournamentSchedule();
-            tournamentState.pairIndex = 0;
-            tournamentState.lastMatchKey = null;
-            tournamentState.countdownDeadlineTs = Date.now() + 10000;
+            if (!tournamentState.schedule.length) {
+                tournamentState.schedule = buildTournamentSchedule();
+            }
+            if (!Number.isInteger(tournamentState.pairIndex) || tournamentState.pairIndex < 0) {
+                tournamentState.pairIndex = 0;
+            }
+            if (!Number.isFinite(tournamentState.deadlineTs)) {
+                tournamentState.deadlineTs = Date.now() + tournamentDurationMs;
+            }
+            if (!Number.isFinite(tournamentState.countdownDeadlineTs)) {
+                tournamentState.countdownDeadlineTs = Date.now() + 10000;
+            }
             if (tournamentState.countdownTimer) clearInterval(tournamentState.countdownTimer);
             tournamentState.countdownTimer = setInterval(() => {
                 if (gameModeSelect.value !== 'webxdc-tournament' || tournamentState.finished) {
@@ -2437,15 +2922,20 @@
                     tournamentState.countdownTimer = null;
                     return;
                 }
+                maybeHandleTournamentExpiry();
                 const remainingMs = tournamentState.countdownDeadlineTs - Date.now();
                 updateMoveTimerDisplay();
                 if (remainingMs <= 0) {
                     clearInterval(tournamentState.countdownTimer);
                     tournamentState.countdownTimer = null;
                     tournamentState.countdownDeadlineTs = null;
+                    if (isTournamentClockExpired(Date.now())) {
+                        finalizeTournament();
+                        return;
+                    }
                     if (tournamentState.schedule.length) {
                         initBoard(false);
-                        updateTournamentMatchState(0);
+                        updateTournamentMatchState(tournamentState.pairIndex);
                         updateTurnIndicator();
                     }
                     updateMoveTimerDisplay();
@@ -2453,16 +2943,21 @@
                     updateModeSelectState();
                 }
             }, 250);
+            startTournamentClockMonitor();
             updateMoveTimerDisplay();
+            updateTournamentMatchDisplay();
             updateModeSelectState();
         }
 
-        function beginTournamentMode({ fromRemote = false, pairIndex = 0, schedule = null, countdownDeadlineTs = null, seatSeed = null, broadcast = true } = {}) {
+        function beginTournamentMode({ fromRemote = false, pairIndex = 0, schedule = null, countdownDeadlineTs = null, deadlineTs = null, seatSeed = null, cycle = 0, matchNumber = 1, broadcast = true } = {}) {
             const nextSchedule = Array.isArray(schedule) ? schedule : buildTournamentSchedule();
             const nextPairIndex = Number.isInteger(pairIndex) ? pairIndex : 0;
             const nextCountdownDeadlineTs = Number.isFinite(countdownDeadlineTs)
                 ? countdownDeadlineTs
                 : Date.now() + 10000;
+            const nextDeadlineTs = Number.isFinite(deadlineTs)
+                ? deadlineTs
+                : Date.now() + tournamentDurationMs;
             const nextSeatSeed = typeof seatSeed === 'string' && seatSeed ? seatSeed : createSeatSeed();
 
             gameModeSelect.value = 'webxdc-tournament';
@@ -2475,12 +2970,47 @@
             tournamentState.lastMatchKey = null;
             tournamentState.seatSeed = nextSeatSeed;
             tournamentState.countdownDeadlineTs = nextCountdownDeadlineTs;
+            tournamentState.deadlineTs = nextDeadlineTs;
+            tournamentState.cycle = Number.isInteger(cycle) && cycle >= 0 ? cycle : 0;
+            tournamentState.matchNumber = Number.isInteger(matchNumber) && matchNumber > 0 ? matchNumber : 1;
+            tournamentState.expiryNotified = false;
             tournamentPlayerAddrLock.clear();
+            // Full reset of all per-tournament state so new tournament starts clean.
+            // knownLeftPeers must be cleared so players from the previous tournament can
+            // re-join without being silently blocked by applyPeerListSync.
+            knownLeftPeers.clear();
+            // Stamp all currently-connected players' lastSeen to now so the exit monitor
+            // doesn't falsely evict players whose lastSeen is stale from a previous session.
+            // This is critical when a player left+rejoined (getting a new random peerId) and
+            // was last seen >15s ago — without this reset they'd be ejected within 5s of the
+            // new tournament starting.
+            const nowTs = Date.now();
+            for (const peerId of Object.keys(connectedPlayers)) {
+                if (connectedPlayers[peerId]) connectedPlayers[peerId].lastSeen = nowTs;
+            }
+            playerScoresByPeer = {};
+            scores[1] = 0;
+            scores[2] = 0;
             networkPlayers = { 1: null, 2: null };
             myAssignedPlayer = null;
             initBoard(false);
             updateTournamentMatchState(tournamentState.pairIndex);
+
+            // Safety net: if a network player was evicted by stale-detection before this
+            // tournament reset, their connectedPlayers entry was deleted. The exit monitor
+            // would immediately see them as "missing" and terminate the tournament within 5 s.
+            // Re-add a placeholder entry with lastSeen = now so they survive until their
+            // PRESENCE/JOIN arrives (typically within 1-2 s of the reset broadcast).
+            const recoveryNow = Date.now();
+            for (const assignedPeerId of [networkPlayers[1], networkPlayers[2]].filter(Boolean)) {
+                if (assignedPeerId !== myPeerId && !connectedPlayers[assignedPeerId]) {
+                    const cachedAddr = [...canonicalPeerIdByAddr.entries()].find(([, v]) => v === assignedPeerId)?.[0] || null;
+                    connectedPlayers[assignedPeerId] = { addr: cachedAddr, name: displayNameForPeer(assignedPeerId), lastSeen: recoveryNow };
+                    debugLog('TOURNAMENT_PLAYER_READDED', { assignedPeerId, cachedAddr, reason: 'stale-eviction-recovery' });
+                }
+            }
             startTournamentCountdown();
+            startTournamentClockMonitor();
             updateTurnIndicator();
             updateAllPlayersScoreboard();
 
@@ -2490,7 +3020,10 @@
                     mode: 'webxdc-tournament',
                     pairIndex: tournamentState.pairIndex,
                     countdownDeadlineTs: tournamentState.countdownDeadlineTs,
+                    deadlineTs: tournamentState.deadlineTs,
                     seatSeed: tournamentState.seatSeed,
+                    cycle: tournamentState.cycle,
+                    matchNumber: tournamentState.matchNumber,
                     schedule: tournamentState.schedule,
                     peerId: myPeerId,
                     name: myName,
@@ -2498,9 +3031,15 @@
                 }, 'Tournament mode started', 'Tournament mode started');
             }
 
-            if (!fromRemote) {
-                announcePresence();
+            // Always announce presence — this refreshes lastSeen on all peers' devices for
+            // this peer, preventing the 15s stale-detection from prematurely ending matches
+            // in the new tournament. Use JOIN for the local initiator (shows notification),
+            // PRESENCE for remote receivers (quiet ping that still updates lastSeen).
+            if (window.webxdc) {
+                requestPeerListSync('tournament-begin');
+                sendPeerListSync('tournament-begin');
             }
+            announcePresence(fromRemote ? 'PRESENCE' : 'JOIN');
         }
 
         function broadcastTournamentMode() {
@@ -2510,7 +3049,10 @@
                 pairIndex: tournamentState.pairIndex,
                 schedule: tournamentState.schedule,
                 countdownDeadlineTs: tournamentState.countdownDeadlineTs,
+                deadlineTs: tournamentState.deadlineTs,
                 seatSeed: tournamentState.seatSeed,
+                cycle: tournamentState.cycle,
+                matchNumber: tournamentState.matchNumber,
                 broadcast: true
             });
         }
@@ -2533,6 +3075,17 @@
                 tournamentState.enabled = false;
                 tournamentState.finished = false;
                 tournamentState.countdownDeadlineTs = null;
+                tournamentState.deadlineTs = null;
+                tournamentState.cycle = 0;
+                tournamentState.expiryNotified = false;
+                if (tournamentState.countdownTimer) {
+                    clearInterval(tournamentState.countdownTimer);
+                    tournamentState.countdownTimer = null;
+                }
+                if (tournamentState.clockTimer) {
+                    clearInterval(tournamentState.clockTimer);
+                    tournamentState.clockTimer = null;
+                }
                 p1NameInput.disabled = true; p2NameInput.disabled = true;
                 p1NameInput.value = networkPlayers[1] ? p1NameInput.value : "Waiting for P1 (Black)";
                 p2NameInput.value = networkPlayers[2] ? p2NameInput.value : "Waiting for P2 (White)";
@@ -2540,6 +3093,20 @@
             } else if (e.target.value === 'webxdc-tournament') {
                 beginTournamentMode({ fromRemote: false, broadcast: true });
             } else {
+                tournamentState.enabled = false;
+                tournamentState.finished = false;
+                tournamentState.countdownDeadlineTs = null;
+                tournamentState.deadlineTs = null;
+                tournamentState.cycle = 0;
+                tournamentState.expiryNotified = false;
+                if (tournamentState.countdownTimer) {
+                    clearInterval(tournamentState.countdownTimer);
+                    tournamentState.countdownTimer = null;
+                }
+                if (tournamentState.clockTimer) {
+                    clearInterval(tournamentState.clockTimer);
+                    tournamentState.clockTimer = null;
+                }
                 p1NameInput.value = "Player 1 (Black)";
                 p2NameInput.value = "Player 2 (White)";
                 p1NameInput.disabled = false; p2NameInput.disabled = false;
@@ -2571,6 +3138,7 @@
                     assignWebxdcSeatsForNewGame(webxdcSeatSeed, options.webxdcParticipants);
                 } else {
                     setNetworkPlayerLabels();
+                    maybeAssignWebxdcSeatsForCurrentGame('init-board', options.webxdcParticipants);
                 }
                 maybeAnnounceGameStart('webxdc-start');
             }
@@ -2599,7 +3167,7 @@
                 } else {
                     const matchPair = tournamentState.schedule[tournamentState.pairIndex];
                     if (Array.isArray(matchPair) && matchPair.length === 2) {
-                        const seatPair = getTournamentSeatAssignment(matchPair, tournamentState.pairIndex, tournamentState.seatSeed);
+                        const seatPair = getTournamentSeatAssignment(matchPair, tournamentState.pairIndex, tournamentState.seatSeed, tournamentState.matchNumber);
                         networkPlayers[1] = seatPair[0] || null;
                         networkPlayers[2] = seatPair[1] || null;
                     }
@@ -2645,6 +3213,9 @@
                             : gameModeSelect.value === 'webxdc'
                                 ? webxdcSeatSeed
                                 : null,
+                        tournamentDeadlineTs: gameModeSelect.value === 'webxdc-tournament'
+                            ? tournamentState.deadlineTs
+                            : null,
                         networkPlayers: gameModeSelect.value === 'webxdc' ? { 1: networkPlayers[1], 2: networkPlayers[2] } : undefined,
                         addr: myAddr,
                         name: myName,
@@ -2875,9 +3446,12 @@
             turnDeadlineTs = null;
             stopMoveTimerInterval();
             updateMoveTimerDisplay();
-            scores[player]++;
             const winnerPeerId = networkPlayers[player];
-            if (winnerPeerId) {
+            const countForStandings = gameModeSelect.value !== 'webxdc-tournament' || currentTournamentResultCounts();
+            if (countForStandings) {
+                scores[player]++;
+            }
+            if (winnerPeerId && countForStandings) {
                 ensurePlayerScoreEntry(winnerPeerId);
                 playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
             }
@@ -2890,6 +3464,13 @@
                     broadcast: isWebxdcNetworkMode() && peerRepresentsLocalPlayer(winnerPeerId)
                 }
             );
+            if (!countForStandings && gameModeSelect.value === 'webxdc-tournament') {
+                addNotification('Tournament time expired during this match. Result not counted toward final standings.', {
+                    id: `tournament-uncounted-win:${winnerPeerId || 'unknown'}:${countMoves(board)}`,
+                    at: Date.now(),
+                    broadcast: true
+                });
+            }
             playWinSound();
             if (gameModeSelect.value === 'webxdc-tournament') {
                 advanceTournamentMatch(winnerPeerId || networkPlayers[player] || null);
@@ -2920,6 +3501,18 @@
                     : cleanPlayerName(currentPlayer === 1 ? p1NameInput.value : p2NameInput.value);
                 turnIndicator.innerHTML = `Current Turn: ${localName} ${color}`;
             } else if (gameModeSelect.value === 'webxdc-tournament') {
+                if (tournamentState.finished) {
+                    const standings = getTournamentStandings();
+                    const topThree = standings.slice(0, 3);
+                    const labels = ['1st', '2nd', '3rd'];
+                    const rankText = topThree.length
+                        ? topThree.map((entry, index) => `${labels[index] || `${index + 1}th`} ${entry.name} (${entry.wins} wins)`).join(' • ')
+                        : 'Tournament complete';
+                    turnIndicator.innerHTML = `🏆 Tournament Final: ${rankText}`;
+                    turnIndicator.style.color = '#f1c40f';
+                    updateTournamentMatchDisplay();
+                    return;
+                }
                 const activePair = networkPlayers[1] && networkPlayers[2];
                 const localPlayerNumber = getLocalAssignedPlayerNumber();
                 const iAmPlaying = localPlayerNumber !== null;
@@ -2947,16 +3540,46 @@
             }
             turnIndicator.style.color = '#ecf0f1';
             startMoveTimerForCurrentTurn({ resetDeadline: false });
+            updateTournamentMatchDisplay();
         }
 
         p1NameInput.addEventListener('input', updateTurnIndicator);
         p2NameInput.addEventListener('input', updateTurnIndicator);
         resetBtn.addEventListener('click', () => {
             if (gameModeSelect.value === 'webxdc-tournament') {
-                gameModeSelect.value = 'webxdc-tournament';
-                resetTournamentProgress();
-                startTournamentCountdown();
-                updateTournamentMatchState(0);
+                const startTournamentReset = () => {
+                    const freshSeatSeed = createSeatSeed();
+                    const freshDeadlineTs = Date.now() + tournamentDurationMs;
+                    const freshSchedule = buildTournamentSchedule();
+                    beginTournamentMode({
+                        fromRemote: false,
+                        pairIndex: 0,
+                        schedule: freshSchedule,
+                        countdownDeadlineTs: Date.now() + 10000,
+                        deadlineTs: freshDeadlineTs,
+                        seatSeed: freshSeatSeed,
+                        cycle: 0,
+                        matchNumber: 1,
+                        broadcast: true
+                    });
+                    if (window.webxdc) {
+                        broadcastStateSync('tournament-reset');
+                    }
+                };
+                if (window.webxdc) {
+                    // Preflight roster sync before announcing the next tournament so stale peers
+                    // can be pruned while the previous tournament is still in finished state.
+                    requestPeerListSync('tournament-reset-preflight');
+                    sendPeerListSync('tournament-reset-preflight');
+                    if (tournamentResetPendingTimer) clearTimeout(tournamentResetPendingTimer);
+                    tournamentResetPendingTimer = setTimeout(() => {
+                        tournamentResetPendingTimer = null;
+                        startTournamentReset();
+                    }, 1200);
+                    return;
+                }
+                startTournamentReset();
+                return;
             }
             initBoard(true, {
                 webxdcSeatSeed: gameModeSelect.value === 'webxdc' ? createSeatSeed() : null,
@@ -3192,6 +3815,43 @@
             getGomokuAudioContext();
         }
 
+        // Window size/position persistence — restore saved size or maximize on first run
+        (function applyWindowSizePreference() {
+            try {
+                const saved = localStorage.getItem('gomoku-window-geometry');
+                if (saved) {
+                    const { x, y, w, h } = JSON.parse(saved);
+                    if (Number.isFinite(w) && Number.isFinite(h) && w > 100 && h > 100) {
+                        window.resizeTo(w, h);
+                        if (Number.isFinite(x) && Number.isFinite(y)) {
+                            window.moveTo(x, y);
+                        }
+                        return;
+                    }
+                }
+                // No saved geometry — start maximized
+                window.resizeTo(screen.availWidth, screen.availHeight);
+                window.moveTo(screen.availLeft || 0, screen.availTop || 0);
+            } catch (_) {}
+            // Persist size/position on every resize/move
+            let geometrySaveTimer = null;
+            function saveWindowGeometry() {
+                clearTimeout(geometrySaveTimer);
+                geometrySaveTimer = setTimeout(() => {
+                    try {
+                        localStorage.setItem('gomoku-window-geometry', JSON.stringify({
+                            x: window.screenX,
+                            y: window.screenY,
+                            w: window.outerWidth,
+                            h: window.outerHeight
+                        }));
+                    } catch (_) {}
+                }, 500);
+            }
+            window.addEventListener('resize', saveWindowGeometry);
+            window.addEventListener('move', saveWindowGeometry);
+        })();
+
         // Boot
         const chatInstanceInfo = getChatInstanceInfo();
         debugLog('APP_BOOT', { appVersion, myPeerId, myAddr, myName });
@@ -3208,8 +3868,10 @@
             requestPeerListSync('startup');
             sendPeerListSync('startup');
         }, 1000);
+        let hiddenLeaveTimer = null;
         const triggerLocalLeave = (reason) => {
-            if (document.visibilityState === 'hidden' || reason === 'pagehide' || reason === 'beforeunload' || reason === 'unload' || reason === 'visibilitychange') {
+            if (reason === 'pagehide' || reason === 'beforeunload' || reason === 'unload') {
+                clearTimeout(hiddenLeaveTimer);
                 broadcastLocalLeave(reason);
             }
         };
@@ -3220,7 +3882,26 @@
         document.addEventListener('keydown', primeAudioContext, { once: true });
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'hidden') {
-                triggerLocalLeave('visibilitychange');
+                // Start a grace timer — if the player doesn't return within 8 s we assume
+                // the app was backgrounded-then-killed (common on mobile where pagehide /
+                // beforeunload never fire). Sending LEAVE now lets peers know quickly
+                // instead of waiting for stale detection (~15-20 s).
+                if (gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament') {
+                    clearTimeout(hiddenLeaveTimer);
+                    hiddenLeaveTimer = setTimeout(() => {
+                        broadcastLocalLeave('visibility-hidden-timeout');
+                    }, 8000);
+                }
+            } else if (document.visibilityState === 'visible') {
+                // Player returned — cancel the grace timer and re-announce presence.
+                clearTimeout(hiddenLeaveTimer);
+                hiddenLeaveTimer = null;
+                // Reset so the next actual close will correctly send a new LEAVE.
+                localLeaveBroadcastSent = false;
+                if (gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament') {
+                    announcePresence('PRESENCE');
+                    sendPeerListSync('visibility-restored');
+                }
             }
         });
         setTimeout(() => {
@@ -3240,16 +3921,19 @@
             p1NameInput.value = "Waiting for P1 (Black)";
             p2NameInput.value = "Waiting for P2 (White)";
             p1NameInput.disabled = true; p2NameInput.disabled = true;
-            tournamentState.enabled = true;
+            tournamentState.enabled = false;
             tournamentState.finished = false;
-            tournamentState.schedule = buildTournamentSchedule();
+            tournamentState.schedule = [];
             tournamentState.pairIndex = 0;
             tournamentState.lastMatchKey = null;
-            tournamentState.countdownDeadlineTs = Date.now() + 10000;
-            updateTournamentMatchState(0);
-            startTournamentCountdown();
-            announcePresence();
-            broadcastTournamentMode();
+            tournamentState.deadlineTs = null;
+            tournamentState.cycle = 0;
+            tournamentState.matchNumber = 1;
+            tournamentState.expiryNotified = false;
+            tournamentState.countdownDeadlineTs = null;
+            updateMoveTimerDisplay();
+            updateTournamentMatchDisplay();
+            announcePresence('PRESENCE');
         }
         initBoard(false);
     </script>

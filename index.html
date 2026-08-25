@@ -23,6 +23,8 @@
             align-items: center;
             margin: 0;
             padding: 20px;
+            width: 100%;
+            box-sizing: border-box;
             overflow-x: hidden;
         }
         body.debug-open {
@@ -94,7 +96,7 @@
             display: grid;
             grid-template-columns: repeat(15, minmax(0, 1fr));
             grid-template-rows: repeat(15, minmax(0, 1fr));
-            width: min(92vw, 620px);
+            width: min(100%, 620px);
             aspect-ratio: 1;
             padding: var(--board-edge);
             box-sizing: border-box;
@@ -258,13 +260,18 @@
             position: fixed;
             top: 0;
             right: 0;
-            width: min(440px, 38vw);
+            width: min(440px, min(38vw, 100vw));
             height: 100vh;
             max-height: 100vh;
             z-index: 245;
             pointer-events: none;
+            transition: transform 0.25s ease;
+            overflow: visible;
         }
         .notifications-popup.visible { display: block; }
+        .notifications-popup.minimized {
+            transform: translateX(calc(100% - 44px));
+        }
         .notifications-panel {
             width: 100%;
             height: 100%;
@@ -277,6 +284,36 @@
             display: flex;
             flex-direction: column;
             pointer-events: auto;
+        }
+        .notifications-popup.minimized .notifications-panel {
+            display: none;
+        }
+        .notifications-tab {
+            display: none;
+            position: fixed;
+            top: 50%;
+            right: 0;
+            transform: translateY(-50%);
+            width: 44px;
+            height: 148px;
+            padding: 0;
+            border-radius: 10px 0 0 10px;
+            border: 1px solid #4a6075;
+            border-right: none;
+            background: #1f2d3a;
+            color: #f1c40f;
+            font-weight: 700;
+            font-size: 24px;
+            line-height: 1;
+            box-shadow: -4px 8px 18px rgba(0, 0, 0, 0.28);
+            pointer-events: auto;
+            z-index: 250;
+            cursor: ns-resize;
+            user-select: none;
+            touch-action: none;
+        }
+        .notifications-popup.minimized ~ .notifications-tab {
+            display: block;
         }
         .notifications-header {
             display: flex;
@@ -303,6 +340,67 @@
             line-height: 1.35;
             color: #d6e4f0;
             min-height: 180px;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 12px;
+            }
+
+            h1 {
+                font-size: clamp(24px, 7vw, 32px);
+                text-align: center;
+            }
+
+            .dashboard,
+            .all-players-scoreboard,
+            .controls {
+                max-width: 100%;
+            }
+
+            .dashboard {
+                flex-direction: column;
+                gap: 10px;
+                padding: 12px;
+            }
+
+            .player-info {
+                width: 100%;
+            }
+
+            #board {
+                width: min(100%, calc(100vw - 24px));
+            }
+
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .controls select,
+            .controls button {
+                width: 100%;
+            }
+
+            .notifications-popup {
+                width: min(82vw, 320px);
+            }
+        }
+
+        @media (max-width: 480px) {
+            body {
+                padding: 8px;
+            }
+
+            .dashboard,
+            .all-players-scoreboard {
+                padding-left: 10px;
+                padding-right: 10px;
+            }
+
+            #board {
+                width: min(100%, calc(100vw - 16px));
+            }
         }
 
         #fireworksCanvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 100; }
@@ -367,12 +465,14 @@
             <div class="notifications-header" id="notifications-header">
                 <span>Notifications</span>
                 <div class="notifications-actions">
+                    <button id="notifications-toggle-btn" type="button" aria-label="Collapse notifications">▶</button>
                     <button id="notifications-clear-btn" type="button">Clear</button>
                 </div>
             </div>
             <pre class="notifications-log" id="notifications-log"></pre>
         </div>
     </div>
+    <button class="notifications-tab" id="notifications-tab-btn" type="button" aria-label="Expand notifications">◀</button>
 
     <script src="version.js"></script>
     <script>
@@ -415,6 +515,8 @@
         const notificationsPopup = document.getElementById('notifications-popup');
         const notificationsPanel = document.getElementById('notifications-panel');
         const notificationsHeader = document.getElementById('notifications-header');
+        const notificationsTabBtn = document.getElementById('notifications-tab-btn');
+        const notificationsToggleBtn = document.getElementById('notifications-toggle-btn');
         const notificationsLogEl = document.getElementById('notifications-log');
         const notificationsClearBtn = document.getElementById('notifications-clear-btn');
         const debugEntries = [];
@@ -429,6 +531,11 @@
         let playerExitMonitorTimer = null;
         let remoteUpdateSeen = false;
         let debugDragState = null;
+        let notificationsDragState = null;
+        let notificationsTabClickSuppressed = false;
+        const compactNotificationsQuery = window.matchMedia('(max-width: 768px)');
+        let notificationsMinimized = false;
+        let notificationsTabTop = Math.floor(window.innerHeight / 2);
         let webxdcRealtimeChannel = null;
         let outgoingMessageSeq = 0;
         let notificationSeq = 0;
@@ -527,8 +634,33 @@
 
         function updateSidePanelLayoutClass() {
             const anyPanelOpen = debugPopup.classList.contains('visible')
-                || notificationsPopup.classList.contains('visible');
+                || (notificationsPopup.classList.contains('visible') && !notificationsPopup.classList.contains('minimized'));
             document.body.classList.toggle('debug-open', anyPanelOpen);
+        }
+
+        function updateNotificationsPanelState() {
+            if (!notificationsPopup) return;
+            notificationsPopup.classList.toggle('visible', true);
+            notificationsPopup.classList.toggle('minimized', notificationsMinimized);
+            notificationsPopup.setAttribute('aria-hidden', 'false');
+            if (notificationsToggleBtn) {
+                notificationsToggleBtn.textContent = notificationsMinimized ? '◀' : '▶';
+                notificationsToggleBtn.setAttribute('aria-label', notificationsMinimized ? 'Expand notifications' : 'Collapse notifications');
+            }
+            if (notificationsTabBtn) {
+                notificationsTabBtn.textContent = '◀';
+                notificationsTabBtn.setAttribute('aria-hidden', notificationsMinimized ? 'false' : 'true');
+                notificationsTabBtn.setAttribute('aria-label', 'Expand notifications');
+                notificationsTabBtn.style.top = `${notificationsTabTop}px`;
+            }
+            updateSidePanelLayoutClass();
+        }
+
+        function clampNotificationsTabTop(nextTop) {
+            const tabHeight = 148;
+            const minTop = Math.max(12, tabHeight / 2);
+            const maxTop = Math.max(minTop, window.innerHeight - tabHeight / 2 - 12);
+            return Math.min(maxTop, Math.max(minTop, nextTop));
         }
 
         function formatNotificationTimestamp(ts) {
@@ -621,14 +753,19 @@
 
         function showNotificationsPanel() {
             notificationsPopup.classList.add('visible');
-            notificationsPopup.setAttribute('aria-hidden', 'false');
             notificationsPopup.style.top = '0';
             notificationsPopup.style.right = '0';
-            updateSidePanelLayoutClass();
+            updateNotificationsPanelState();
         }
 
         function hideNotificationsPanel() {
-            // Notifications panel is intentionally persistent once opened.
+            notificationsMinimized = true;
+            updateNotificationsPanelState();
+        }
+
+        function toggleNotificationsPanel() {
+            notificationsMinimized = !notificationsMinimized;
+            updateNotificationsPanelState();
         }
 
         function clampDebugPopupToViewport() {
@@ -662,11 +799,25 @@
 
             const p1Name = cleanPlayerName(p1NameInput.value);
             const p2Name = cleanPlayerName(p2NameInput.value);
-            const noteText = `New game started: ${p1Name} (Black) vs ${p2Name} (White).`;
+            const noteText = `Game started: ${p1Name} (Black) vs ${p2Name} (White).`;
             const noteId = `game-start:${p1Owner}:${p2Owner}:${countMoves(board)}`;
             addNotification(noteText, { id: noteId, at: Date.now(), broadcast: true });
             gameStartAnnounced = true;
             debugLog('GAME_START_ANNOUNCED', { source, p1Owner, p2Owner });
+        }
+
+        function maybeAnnounceLocalGameStart(source = 'unknown') {
+            if (gameStartAnnounced) return;
+            const p1Name = cleanPlayerName(p1NameInput.value);
+            const p2Name = cleanPlayerName(p2NameInput.value);
+            const noteText = `Game started: ${p1Name} (Black) vs ${p2Name} (White).`;
+            addNotification(noteText, {
+                id: `game-start-local:${gameModeSelect.value}:${countMoves(board)}`,
+                at: Date.now(),
+                broadcast: false
+            });
+            gameStartAnnounced = true;
+            debugLog('GAME_START_ANNOUNCED', { source, p1Owner: null, p2Owner: null });
         }
 
         function getCanonicalPeerId(peerId, addr = null) {
@@ -893,6 +1044,9 @@
                         { id: `tournament-turn:${matchKey}`, at: Date.now(), broadcast: false }
                     );
                 }
+            }
+            if (isNewMatch && !gameStartAnnounced) {
+                maybeAnnounceGameStart('tournament-start');
             }
             debugLog('TOURNAMENT_PAIRING_UPDATED', {
                 pairIndex: tournamentState.pairIndex,
@@ -2414,6 +2568,7 @@
                 } else {
                     setNetworkPlayerLabels();
                 }
+                maybeAnnounceGameStart('webxdc-start');
             }
             if (gameModeSelect.value === 'webxdc-tournament') {
                 tournamentState.enabled = true;
@@ -2454,11 +2609,13 @@
                 myAssignedPlayer = null;
                 gameStartAnnounced = false;
                 assignPveSeatsForNewGame(options.pveSeatSeed);
+                maybeAnnounceLocalGameStart('pve-start');
             }
             if (gameModeSelect.value === 'pvp') {
                 networkPlayers = { 1: null, 2: null };
                 myAssignedPlayer = null;
                 gameStartAnnounced = false;
+                maybeAnnounceLocalGameStart('pvp-start');
             }
 
             for (let r = 0; r < boardSize; r++) {
@@ -2821,6 +2978,50 @@
             renderNotifications();
             debugLog('NOTIFICATIONS_CLEARED', {});
         });
+        if (notificationsToggleBtn) {
+            notificationsToggleBtn.addEventListener('click', () => toggleNotificationsPanel());
+        }
+        if (notificationsTabBtn) {
+            notificationsTabBtn.addEventListener('click', (e) => {
+                if (notificationsTabClickSuppressed) {
+                    notificationsTabClickSuppressed = false;
+                    e.preventDefault();
+                    return;
+                }
+                toggleNotificationsPanel();
+            });
+            notificationsTabBtn.addEventListener('pointerdown', (e) => {
+                if (!notificationsPopup.classList.contains('minimized')) return;
+                notificationsDragState = {
+                    pointerId: e.pointerId,
+                    offsetY: e.clientY - notificationsTabTop
+                };
+                notificationsTabClickSuppressed = false;
+                notificationsTabBtn.setPointerCapture(e.pointerId);
+                e.preventDefault();
+            });
+            notificationsTabBtn.addEventListener('pointermove', (e) => {
+                if (!notificationsDragState || notificationsDragState.pointerId !== e.pointerId) return;
+                const nextTop = clampNotificationsTabTop(e.clientY - notificationsDragState.offsetY);
+                if (Math.abs(nextTop - notificationsTabTop) > 4) {
+                    notificationsTabClickSuppressed = true;
+                }
+                notificationsTabTop = nextTop;
+                notificationsTabBtn.style.top = `${notificationsTabTop}px`;
+                e.preventDefault();
+            });
+            notificationsTabBtn.addEventListener('pointerup', (e) => {
+                if (notificationsDragState && notificationsDragState.pointerId === e.pointerId) {
+                    notificationsTabBtn.releasePointerCapture(e.pointerId);
+                    notificationsDragState = null;
+                }
+            });
+            notificationsTabBtn.addEventListener('pointercancel', (e) => {
+                if (notificationsDragState && notificationsDragState.pointerId === e.pointerId) {
+                    notificationsDragState = null;
+                }
+            });
+        }
         debugPanelHeader.addEventListener('pointerdown', (e) => {
             if (!debugPopup.classList.contains('visible')) return;
             if (e.target.closest('button')) return;
@@ -2853,6 +3054,12 @@
         debugPanelHeader.addEventListener('pointercancel', (e) => {
             if (debugDragState && debugDragState.pointerId === e.pointerId) {
                 debugDragState = null;
+            }
+        });
+        window.addEventListener('resize', () => {
+            notificationsTabTop = clampNotificationsTabTop(notificationsTabTop);
+            if (notificationsTabBtn) {
+                notificationsTabBtn.style.top = `${notificationsTabTop}px`;
             }
         });
         // --- Fireworks Animation ---

@@ -8,8 +8,10 @@
     <script src="webxdc.js"></script>
     <style>
         :root {
-            --board-color: #DEB887; 
-            --line-color: #000;
+            --board-edge: clamp(10px, 2.4vw, 18px);
+            --board-color: #d4a05f;
+            --board-shadow: #ae7438;
+            --line-color: rgba(42, 24, 12, 0.72);
         }
 
         body {
@@ -90,39 +92,87 @@
 
         #board {
             display: grid;
-            grid-template-columns: repeat(15, 30px);
-            grid-template-rows: repeat(15, 30px);
-            background-color: var(--board-color);
-            padding: 15px;
-            border-radius: 4px;
-            box-shadow: 0 8px 16px rgba(0,0,0,0.5);
-            border: 2px solid #5c4033;
+            grid-template-columns: repeat(15, minmax(0, 1fr));
+            grid-template-rows: repeat(15, minmax(0, 1fr));
+            width: min(92vw, 620px);
+            aspect-ratio: 1;
+            padding: var(--board-edge);
+            box-sizing: border-box;
+            background:
+                radial-gradient(circle at 50% 35%, rgba(255,255,255,0.16), transparent 30%),
+                radial-gradient(circle at 20% 15%, rgba(255,255,255,0.08), transparent 20%),
+                linear-gradient(135deg, #e0b36f 0%, var(--board-color) 38%, #c88942 100%);
+            border-radius: 10px;
+            box-shadow:
+                inset 0 0 0 1px rgba(255,255,255,0.12),
+                inset 0 0 0 8px rgba(90, 54, 23, 0.18),
+                0 12px 28px rgba(0,0,0,0.45);
+            border: 10px solid var(--board-shadow);
             position: relative;
+            overflow: hidden;
         }
 
-        /* Cleaned up board lines for better rendering across devices */
-        .cell {
-            width: 30px; height: 30px; position: relative; cursor: pointer;
-            background: 
-                linear-gradient(to right, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px),
-                linear-gradient(to bottom, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px);
+        #board::before {
+            content: '';
+            position: absolute;
+            inset: var(--board-edge);
+            pointer-events: none;
+            background:
+                repeating-linear-gradient(
+                    to right,
+                    transparent 0,
+                    transparent calc((100% / 15) - 1px),
+                    rgba(42, 24, 12, 0.55) calc((100% / 15) - 1px),
+                    rgba(42, 24, 12, 0.55) calc(100% / 15)
+                ),
+                repeating-linear-gradient(
+                    to bottom,
+                    transparent 0,
+                    transparent calc((100% / 15) - 1px),
+                    rgba(42, 24, 12, 0.55) calc((100% / 15) - 1px),
+                    rgba(42, 24, 12, 0.55) calc(100% / 15)
+                ),
+                radial-gradient(circle, rgba(42, 24, 12, 0.95) 0 3px, transparent 3.6px) 21.428% 21.428% / 100% 100% no-repeat,
+                radial-gradient(circle, rgba(42, 24, 12, 0.95) 0 3px, transparent 3.6px) 50% 21.428% / 100% 100% no-repeat,
+                radial-gradient(circle, rgba(42, 24, 12, 0.95) 0 3px, transparent 3.6px) 78.572% 21.428% / 100% 100% no-repeat,
+                radial-gradient(circle, rgba(42, 24, 12, 0.95) 0 3px, transparent 3.6px) 21.428% 50% / 100% 100% no-repeat,
+                radial-gradient(circle, rgba(42, 24, 12, 0.95) 0 3px, transparent 3.6px) 50% 50% / 100% 100% no-repeat,
+                radial-gradient(circle, rgba(42, 24, 12, 0.95) 0 3px, transparent 3.6px) 78.572% 50% / 100% 100% no-repeat,
+                radial-gradient(circle, rgba(42, 24, 12, 0.95) 0 3px, transparent 3.6px) 21.428% 78.572% / 100% 100% no-repeat,
+                radial-gradient(circle, rgba(42, 24, 12, 0.95) 0 3px, transparent 3.6px) 50% 78.572% / 100% 100% no-repeat,
+                radial-gradient(circle, rgba(42, 24, 12, 0.95) 0 3px, transparent 3.6px) 78.572% 78.572% / 100% 100% no-repeat;
         }
-        .cell[data-row="0"] { background: linear-gradient(to right, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px), linear-gradient(to bottom, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px); }
-        .cell[data-row="14"] { background: linear-gradient(to right, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px), linear-gradient(to bottom, transparent 0%, var(--line-color) 0%, var(--line-color) 2%, transparent 16px); }
-        .cell[data-col="0"] { background: linear-gradient(to right, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px), linear-gradient(to bottom, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px); }
-        .cell[data-col="14"] { background: linear-gradient(to right, transparent 0%, var(--line-color) 0%, var(--line-color) 2%, transparent 16px), linear-gradient(to bottom, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px); }
-        .cell[data-row="0"][data-col="0"] { background: linear-gradient(to right, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px), linear-gradient(to bottom, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px); }
-        .cell[data-row="0"][data-col="14"] { background: linear-gradient(to right, transparent 0%, var(--line-color) 0%, var(--line-color) 2%, transparent 16px), linear-gradient(to bottom, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px); }
-        .cell[data-row="14"][data-col="0"] { background: linear-gradient(to right, transparent 14px, var(--line-color) 14px, var(--line-color) 16px, transparent 16px), linear-gradient(to bottom, transparent 0%, var(--line-color) 0%, var(--line-color) 2%, transparent 16px); }
-        .cell[data-row="14"][data-col="14"] { background: linear-gradient(to right, transparent 0%, var(--line-color) 0%, var(--line-color) 2%, transparent 16px), linear-gradient(to bottom, transparent 0%, var(--line-color) 0%, var(--line-color) 2%, transparent 16px); }
+
+        .cell {
+            position: relative;
+            cursor: pointer;
+            background: transparent;
+            z-index: 1;
+        }
 
         .piece {
-            width: 24px; height: 24px; border-radius: 50%; position: absolute;
+            width: 76%;
+            height: 76%;
+            border-radius: 50%;
+            position: absolute;
             top: 50%; left: 50%; transform: translate(-50%, -50%);
-            box-shadow: 2px 2px 4px rgba(0,0,0,0.4);
+            box-shadow:
+                0 2px 4px rgba(0,0,0,0.5),
+                inset 0 1px 2px rgba(255,255,255,0.35),
+                inset -2px -3px 4px rgba(0,0,0,0.28);
+            z-index: 2;
         }
-        .piece.black { background: radial-gradient(circle at 30% 30%, #666, #000); }
-        .piece.white { background: radial-gradient(circle at 30% 30%, #fff, #ccc); }
+        .piece.black {
+            background:
+                radial-gradient(circle at 34% 30%, rgba(255,255,255,0.28) 0 12%, transparent 18%),
+                radial-gradient(circle at 36% 34%, #5d5d5d 0%, #161616 42%, #050505 73%, #000 100%);
+        }
+        .piece.white {
+            background:
+                radial-gradient(circle at 34% 30%, rgba(255,255,255,0.92) 0 12%, transparent 18%),
+                radial-gradient(circle at 36% 34%, #ffffff 0%, #f4f4f4 42%, #dedede 74%, #c8c8c8 100%);
+            border: 1px solid rgba(0,0,0,0.18);
+        }
 
         .controls { margin-top: 20px; display: flex; gap: 15px; flex-wrap: wrap; justify-content: center; }
         select, button { padding: 10px 15px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; }

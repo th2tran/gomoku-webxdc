@@ -460,10 +460,6 @@
             <option value="pvp">Local Pass & Play</option>
             <option value="pve">Local vs Computer</option>
         </select>
-        <select id="menu-actions">
-            <option value="">Menu</option>
-            <option value="debug-logs">Debug Logs</option>
-        </select>
         <button id="reset-btn">Reset Board / Sync</button>
     </div>
 
@@ -527,7 +523,7 @@
         const p1NameInput = document.getElementById('p1-name');
         const p2NameInput = document.getElementById('p2-name');
         const gameModeSelect = document.getElementById('game-mode');
-        const menuActionsSelect = document.getElementById('menu-actions');
+        const titleEl = document.getElementById('title');
         const resetBtn = document.getElementById('reset-btn');
         const debugPopup = document.getElementById('debug-popup');
         const debugPanel = document.getElementById('debug-panel');
@@ -580,6 +576,7 @@
         const canonicalPeerIdByAddr = new Map();
         let localLeaveBroadcastSent = false;
         let tournamentResetPendingTimer = null;
+        const debugTitleTapTimes = [];
         const moveTimeLimitMs = 30000;
         let turnDeadlineTs = null;
         let moveTimerInterval = null;
@@ -3587,11 +3584,19 @@
                 pveSeatSeed: gameModeSelect.value === 'pve' ? createSeatSeed() : null
             });
         });
-        menuActionsSelect.addEventListener('change', (e) => {
-            if (e.target.value === 'debug-logs') showDebugPanel();
-            if (e.target.value === 'notifications') showNotificationsPanel();
-            e.target.value = '';
-        });
+        if (titleEl) {
+            titleEl.addEventListener('click', () => {
+                const now = Date.now();
+                debugTitleTapTimes.push(now);
+                while (debugTitleTapTimes.length && (now - debugTitleTapTimes[0]) > 2000) {
+                    debugTitleTapTimes.shift();
+                }
+                if (debugTitleTapTimes.length >= 7) {
+                    debugTitleTapTimes.length = 0;
+                    showDebugPanel();
+                }
+            });
+        }
         debugSearchInput.addEventListener('input', (e) => {
             debugSearchQuery = e.target.value || '';
             renderDebugLog();

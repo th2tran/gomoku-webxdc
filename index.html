@@ -1590,14 +1590,30 @@
 
             const leaverName = displayNameForPeer(peerId);
             const leaverAddr = connectedPlayers[peerId]?.addr || null;
+            const canonicalPeerId = getCanonicalPeerId(peerId, leaverAddr) || peerId;
+            const peerIdsToRemove = new Set([peerId, canonicalPeerId].filter(Boolean));
+            if (leaverAddr) {
+                const normAddr = normalizeAddr(leaverAddr);
+                for (const [candidatePeerId, record] of Object.entries(connectedPlayers)) {
+                    if (candidatePeerId && candidatePeerId !== myPeerId && record && normalizeAddr(record.addr) === normAddr) {
+                        peerIdsToRemove.add(candidatePeerId);
+                    }
+                }
+                canonicalPeerIdByAddr.delete(normAddr);
+            }
+            selfAliases.delete(peerId);
+            selfAliases.delete(canonicalPeerId);
+            for (const candidatePeerId of Array.from(peerIdsToRemove)) {
+                delete connectedPlayers[candidatePeerId];
+                delete playerScoresByPeer[candidatePeerId];
+                joinNotificationKeys.delete(`peer:${candidatePeerId}`);
+                if (leaverAddr) joinNotificationKeys.delete(`addr:${normalizeAddr(leaverAddr)}`);
+            }
             // Capture before clearing slots — needed to decide whether to advance the match
             const wasActivePlayer = networkPlayers[1] === peerId || networkPlayers[2] === peerId;
-            delete connectedPlayers[peerId];
             if (networkPlayers[1] === peerId) networkPlayers[1] = null;
             if (networkPlayers[2] === peerId) networkPlayers[2] = null;
             syncMyAssignedPlayer();
-            joinNotificationKeys.delete(`peer:${peerId}`);
-            if (leaverAddr) joinNotificationKeys.delete(`addr:${leaverAddr}`);
             updateConnectionIndicator();
             updateAllPlayersScoreboard();
             updateTurnIndicator();
@@ -2204,7 +2220,7 @@
             ]);
 
             const rows = Array.from(peerIds)
-                .filter(Boolean)
+                .filter((peerId) => !!peerId && !knownLeftPeers.has(peerId))
                 .map((peerId) => {
                     ensurePlayerScoreEntry(peerId);
                     return {

@@ -583,6 +583,11 @@
         let timeoutResolutionInFlight = false;
         const tournamentPlayerAddrLock = new Map(); // addr → peerId: first device that claimed a tournament slot for that addr
         const tournamentDurationMs = 60 * 60 * 1000;
+        const tournamentSingleRemainingConfirmation = {
+            pending: false,
+            timer: null,
+            token: 0
+        };
         const tournamentState = {
             enabled: false,
             pairIndex: 0,
@@ -832,7 +837,7 @@
 
             const p1Name = cleanPlayerName(p1NameInput.value);
             const p2Name = cleanPlayerName(p2NameInput.value);
-            const noteText = `Game started: ${p1Name} (Black) vs ${p2Name} (White).`;
+            const noteText = `Game ${tournamentState.matchNumber} started: ${p1Name} (Black) vs ${p2Name} (White).`;
             const noteId = `game-start:${p1Owner}:${p2Owner}:${countMoves(board)}`;
             addNotification(noteText, { id: noteId, at: Date.now(), broadcast: true });
             playGameStartSound();
@@ -844,7 +849,7 @@
             if (gameStartAnnounced) return;
             const p1Name = cleanPlayerName(p1NameInput.value);
             const p2Name = cleanPlayerName(p2NameInput.value);
-            const noteText = `Game started: ${p1Name} (Black) vs ${p2Name} (White).`;
+            const noteText = `Game started: ${p1Name} (Black) vs ${p2Name} (White). game#${tournamentState.matchNumber}`;
             addNotification(noteText, {
                 id: `game-start-local:${gameModeSelect.value}:${countMoves(board)}`,
                 at: Date.now(),
@@ -1256,6 +1261,7 @@
                 });
             }
             if (gameOver || !networkPlayers[1] || !networkPlayers[2]) {
+                tournamentSingleRemainingConfirmation.pending = false;
                 finalizeTournament();
             }
         }
@@ -1277,16 +1283,48 @@
 
         function maybeFinalizeTournamentForSingleRemainingPlayer() {
             if (gameModeSelect.value !== 'webxdc-tournament' || tournamentState.finished) return false;
+            // Never let a leaving peer self-finalize the tournament; only live peers may confirm
+            // a single remaining player after a roster sync.
+            if (tournamentSingleRemainingConfirmation.pending) return false;
             const rosterPeers = getTournamentRosterPeers();
             if (rosterPeers.length !== 1) return false;
+            if (window.webxdc) {
+                tournamentSingleRemainingConfirmation.pending = true;
+                const confirmationToken = ++tournamentSingleRemainingConfirmation.token;
+                requestPeerListSync('tournament-final-check');
+                sendPeerListSync('tournament-final-check');
+                if (tournamentSingleRemainingConfirmation.timer) {
+                    clearTimeout(tournamentSingleRemainingConfirmation.timer);
+                }
+                tournamentSingleRemainingConfirmation.timer = setTimeout(() => {
+                    tournamentSingleRemainingConfirmation.timer = null;
+                    if (tournamentSingleRemainingConfirmation.token !== confirmationToken || tournamentState.finished) return;
+                    tournamentSingleRemainingConfirmation.pending = false;
+                    const confirmedRosterPeers = getTournamentRosterPeers();
+                    if (confirmedRosterPeers.length === 1) {
+                        maybeFinalizeTournamentForSingleRemainingPlayer();
+                    }
+                }, 1500);
+                return false;
+            }
             const winnerPeerId = rosterPeers[0];
             if (!winnerPeerId) return false;
             tournamentState.enabled = false;
             tournamentState.finished = true;
             gameOver = true;
+            tournamentSingleRemainingConfirmation.pending = false;
+            if (tournamentSingleRemainingConfirmation.timer) {
+                clearTimeout(tournamentSingleRemainingConfirmation.timer);
+                tournamentSingleRemainingConfirmation.timer = null;
+            }
             tournamentState.countdownDeadlineTs = null;
             tournamentState.deadlineTs = null;
             tournamentState.expiryNotified = true;
+            tournamentSingleRemainingConfirmation.pending = false;
+            if (tournamentSingleRemainingConfirmation.timer) {
+                clearTimeout(tournamentSingleRemainingConfirmation.timer);
+                tournamentSingleRemainingConfirmation.timer = null;
+            }
             if (tournamentState.countdownTimer) {
                 clearInterval(tournamentState.countdownTimer);
                 tournamentState.countdownTimer = null;
@@ -1306,9 +1344,9 @@
                 broadcast: true
             });
             updateAllPlayersScoreboard();
-            startFireworks();
-            playTournamentJubilationSound();
+            maybeStartTournamentFireworks();
             debugLog('TOURNAMENT_SINGLE_PLAYER_WINNER', { winnerPeerId, rosterPeers });
+            tournamentSingleRemainingConfirmation.pending = false;
             return true;
         }
 
@@ -1354,8 +1392,7 @@
             });
             updateAllPlayersScoreboard();
             updateTournamentMatchDisplay();
-            startFireworks();
-            playTournamentJubilationSound();
+            maybeStartTournamentFireworks();
             debugLog('TOURNAMENT_FINISHED', { standings: topThree });
             // Persist finished state to history so late-joining peers can replay it
             if (window.webxdc) {
@@ -1375,12 +1412,22 @@
                 return;
             }
             const nextIndex = tournamentState.pairIndex + 1;
-            if (nextIndex >= tournamentState.pairings.length) {
+            const completedRoundRobin = nextIndex >= tournamentState.pairings.length;
+            if (completedRoundRobin) {
                 tournamentState.pairIndex = 0;
                 tournamentState.cycle = (Number.isInteger(tournamentState.cycle) ? tournamentState.cycle : 0) + 1;
+                addNotification(
+                    `Round-robin completed. Starting round-robin #${tournamentState.cycle + 1} before tournament time runs out.`,
+                    {
+                        id: `tournament-round-robin:${tournamentState.cycle}:${Date.now()}`,
+                        at: Date.now(),
+                        broadcast: true
+                    }
+                );
             } else {
                 tournamentState.pairIndex = nextIndex;
             }
+            if (completedRoundRobin) stopFireworks();
             tournamentState.matchNumber = (Number.isInteger(tournamentState.matchNumber) && tournamentState.matchNumber > 0
                 ? tournamentState.matchNumber
                 : 1) + 1;
@@ -1629,7 +1676,6 @@
                     requestPeerListSync('tournament-leave');
                     sendPeerListSync('tournament-leave');
                 }
-                maybeFinalizeTournamentForSingleRemainingPlayer();
                 // If the leaving peer was in an active match and it isn't over yet, skip —
                 // applyWithdrawalResult → advanceTournamentMatch will properly close and advance.
                 // Calling updateTournamentMatchState here would prematurely set up the next pairing
@@ -1985,7 +2031,13 @@
                 || (payload.action === 'PRESENCE' && !isRosterSyncAction)
                 || (!isRosterSyncAction && payload.action !== 'PRESENCE' && payload.action !== 'LEAVE' && payload.action !== 'WITHDRAWAL' && isNewPeer)
             ) && !alreadyNotifiedJoin && !isRecentJoinDuplicate;
-            if (shouldNotifyJoin) {
+            const shouldSilenceJoinAfterRosterSync = isRosterSyncAction && (
+                alreadyNotifiedJoin
+                || isRecentJoinDuplicate
+                || knownLeftPeers.has(senderPeerId)
+                || (senderAddr && recentJoinAtByIdentity.has(senderAddr))
+            );
+            if (shouldNotifyJoin && !shouldSilenceJoinAfterRosterSync) {
                 const joinDisplayName = cleanPlayerName(senderName || payload.name || 'Player');
                 const joinDedupeSource = senderAddr || senderPeerId || joinDisplayName.toLowerCase();
                 addNotification(`${joinDisplayName} joined the game.`, {
@@ -2223,9 +2275,10 @@
                 .filter((peerId) => !!peerId && !knownLeftPeers.has(peerId))
                 .map((peerId) => {
                     ensurePlayerScoreEntry(peerId);
+                    const isLocalPeer = peerRepresentsLocalPlayer(peerId);
                     return {
                         peerId,
-                        name: displayNameForPeer(peerId),
+                        name: `${displayNameForPeer(peerId)}${isLocalPeer ? ' (you)' : ''}`,
                         score: playerScoresByPeer[peerId] || 0
                     };
                 })
@@ -2551,8 +2604,11 @@
                 rememberConnectedPlayer(peerId, peer.name || 'Player', peerAddr || null, { refreshLastSeen: true, isLive: true });
             }
             if (sourcePeerId && sourcePeerId !== myPeerId && !knownLeftPeers.has(sourcePeerId)) {
-                incomingPeerIds.add(sourcePeerId);
-                rememberConnectedPlayer(sourcePeerId, payload?.name || 'Player', normalizeAddr(sourceAddr) || null, { refreshLastSeen: true, isLive: true });
+                const sourceAddrNorm = normalizeAddr(sourceAddr) || null;
+                if (!(myAddrNorm && sourceAddrNorm && sourceAddrNorm === myAddrNorm)) {
+                    incomingPeerIds.add(sourcePeerId);
+                    rememberConnectedPlayer(sourcePeerId, payload?.name || 'Player', sourceAddrNorm, { refreshLastSeen: true, isLive: true });
+                }
             }
             const isTournamentMode = gameModeSelect.value === 'webxdc-tournament';
             const allowTournamentPrune = isTournamentMode && tournamentState.finished;
@@ -2564,6 +2620,11 @@
                 });
             for (const missingPeerId of missingPeers) {
                 const missingPeerName = displayNameForPeer(missingPeerId);
+                const missingPeerAddr = connectedPlayers[missingPeerId]?.addr || null;
+                if (missingPeerAddr) {
+                    const recentJoin = recentJoinAtByIdentity.get(normalizeAddr(missingPeerAddr) || missingPeerAddr);
+                    if (Number.isFinite(recentJoin) && Date.now() - recentJoin < 30000) continue;
+                }
                 applyPeerLeft(missingPeerId, 'peer-list-prune', `leave:${missingPeerId}:${Date.now()}`, `${missingPeerName} left the game.`);
                 const activePeerId = Number.isInteger(currentPlayer) && networkPlayers[currentPlayer]
                     ? networkPlayers[currentPlayer]
@@ -2752,10 +2813,26 @@
                 1: typeof state.networkPlayers?.[1] === 'string' ? state.networkPlayers[1] : null,
                 2: typeof state.networkPlayers?.[2] === 'string' ? state.networkPlayers[2] : null
             };
+            const previousNetworkPlayers = { 1: networkPlayers[1], 2: networkPlayers[2] };
+            const hasLocalSlots = !!networkPlayers[1] || !!networkPlayers[2];
+            const hasIncomingSlots = !!incomingNP[1] || !!incomingNP[2];
             networkPlayers = {
-                1: incomingNP[1] || networkPlayers[1] || null,
-                2: incomingNP[2] || networkPlayers[2] || null
+                // For tournament mode, prefer a complete incoming pair to avoid stale local slots
+                // from the previous match causing local "waiting for pairing" desync.
+                1: (state.gameMode === 'webxdc-tournament' && hasIncomingSlots)
+                    ? incomingNP[1]
+                    : incomingNP[1] || networkPlayers[1] || null,
+                2: (state.gameMode === 'webxdc-tournament' && hasIncomingSlots)
+                    ? incomingNP[2]
+                    : incomingNP[2] || networkPlayers[2] || null
             };
+            if (state.gameMode === 'webxdc-tournament' && hasLocalSlots && hasIncomingSlots
+                && (incomingNP[1] !== networkPlayers[1] || incomingNP[2] !== networkPlayers[2])) {
+                debugLog('TOURNAMENT_SLOTS_REPLACED_FROM_STATE', {
+                    previous: previousNetworkPlayers,
+                    incoming: incomingNP
+                });
+            }
             syncMyAssignedPlayer();
             if (state.gameMode === 'webxdc-tournament' || state.tournamentState?.enabled || state.tournamentState?.finished) {
                 gameModeSelect.value = 'webxdc-tournament';
@@ -2798,11 +2875,7 @@
                     } else if (!tournamentState.finished) {
                         startTournamentClockMonitor();
                     }
-                    // Fire jubilation once when we transition into finished state
-                    if (tournamentState.finished && !wasFinished) {
-                        startFireworks();
-                        playTournamentJubilationSound();
-                    }
+                    // Jubilation is handled by the direct tournament completion path.
                 }
                 updateModeSelectState();
             }
@@ -3091,6 +3164,11 @@
                 tournamentState.deadlineTs = null;
                 tournamentState.cycle = 0;
                 tournamentState.expiryNotified = false;
+                tournamentSingleRemainingConfirmation.pending = false;
+                if (tournamentSingleRemainingConfirmation.timer) {
+                    clearTimeout(tournamentSingleRemainingConfirmation.timer);
+                    tournamentSingleRemainingConfirmation.timer = null;
+                }
                 if (tournamentState.countdownTimer) {
                     clearInterval(tournamentState.countdownTimer);
                     tournamentState.countdownTimer = null;
@@ -3487,6 +3565,7 @@
             playWinSound();
             if (gameModeSelect.value === 'webxdc-tournament') {
                 advanceTournamentMatch(winnerPeerId || networkPlayers[player] || null);
+                tournamentSingleRemainingConfirmation.pending = false;
             } else {
                 startFireworks();
             }
@@ -3757,6 +3836,11 @@
         }
 
         function startFireworks() { if (!fireworkAnimationId) animateFireworks(); }
+        function maybeStartTournamentFireworks() {
+            if (gameModeSelect.value !== 'webxdc-tournament' || !tournamentState.finished) return;
+            startFireworks();
+            playTournamentJubilationSound();
+        }
         function stopFireworks() {
             if (fireworkAnimationId) { cancelAnimationFrame(fireworkAnimationId); fireworkAnimationId = null; }
             ctx.clearRect(0, 0, canvas.width, canvas.height);

@@ -2240,13 +2240,14 @@
             const rawName = connectedPlayers[peerId]?.name;
             if (typeof rawName === 'string' && rawName.trim()) return rawName.trim();
             if (peerId === myPeerId && myName) return myName;
-            // Fallback: find name via same-addr canonical entry
+            // Fallback: find name via same-addr canonical entry only for peers we still
+            // consider connected. This avoids showing stale canonical IDs after rejoin.
             const peerAddr = connectedPlayers[peerId]?.addr;
             if (peerAddr) {
                 const normAddr = normalizeAddr(peerAddr);
                 if (normAddr) {
                     const canonicalId = findKnownPeerIdByAddr(normAddr);
-                    if (canonicalId && canonicalId !== peerId) {
+                    if (canonicalId && canonicalId !== peerId && connectedPlayers[canonicalId]) {
                         const canonicalName = connectedPlayers[canonicalId]?.name;
                         if (typeof canonicalName === 'string' && canonicalName.trim()) return canonicalName.trim();
                     }
@@ -2399,6 +2400,12 @@
                         updateTurnIndicator();
                         startMoveTimerForCurrentTurn({ resetDeadline: !Number.isFinite(turnDeadlineTs) });
                     }
+                }
+                if (options.isLive !== false) {
+                    updateAllPlayersScoreboard();
+                }
+                if (options.isLive !== false && !activeMatchInProgress && tournamentState.schedule.length) {
+                    maybeFinalizeTournamentForSingleRemainingPlayer();
                 }
             }
         }
@@ -2580,6 +2587,7 @@
             if (!peers.length) return;
             const incomingPeerIds = new Set();
             const myAddrNorm = normalizeAddr(myAddr);
+            const aliasReplacements = [];
             for (const peer of peers) {
                 if (!peer || typeof peer.peerId !== 'string' || !peer.peerId.trim()) continue;
                 const peerId = peer.peerId.trim();
@@ -2600,6 +2608,17 @@
                     if (peerId !== myPeerId) selfAliases.add(peerId);
                     continue;
                 }
+                const sameAddrCanonical = peerAddr
+                    ? Object.keys(connectedPlayers).find((candidatePeerId) => {
+                        return candidatePeerId !== peerId && connectedPlayers[candidatePeerId]?.addr && normalizeAddr(connectedPlayers[candidatePeerId].addr) === peerAddr;
+                    })
+                    : null;
+                if (sameAddrCanonical && sameAddrCanonical !== peerId) {
+                    const canonicalLive = !knownLeftPeers.has(sameAddrCanonical) && !!connectedPlayers[sameAddrCanonical];
+                    if (canonicalLive) {
+                        aliasReplacements.push({ oldPeerId: sameAddrCanonical, newPeerId: peerId, addr: peerAddr, name: peer.name || 'Player' });
+                    }
+                }
                 incomingPeerIds.add(peerId);
                 rememberConnectedPlayer(peerId, peer.name || 'Player', peerAddr || null, { refreshLastSeen: true, isLive: true });
             }
@@ -2608,6 +2627,31 @@
                 if (!(myAddrNorm && sourceAddrNorm && sourceAddrNorm === myAddrNorm)) {
                     incomingPeerIds.add(sourcePeerId);
                     rememberConnectedPlayer(sourcePeerId, payload?.name || 'Player', sourceAddrNorm, { refreshLastSeen: true, isLive: true });
+                }
+            }
+            for (const { oldPeerId, newPeerId, addr, name } of aliasReplacements) {
+                if (oldPeerId === newPeerId) continue;
+                if (connectedPlayers[oldPeerId]) {
+                    const oldScore = playerScoresByPeer[oldPeerId] || 0;
+                    const newScore = playerScoresByPeer[newPeerId] || 0;
+                    if (oldScore > 0 || newScore > 0) {
+                        playerScoresByPeer[newPeerId] = Math.max(newScore, oldScore);
+                    }
+                    delete playerScoresByPeer[oldPeerId];
+                    delete connectedPlayers[oldPeerId];
+                    joinNotificationKeys.delete(`peer:${oldPeerId}`);
+                    if (addr) joinNotificationKeys.delete(`addr:${normalizeAddr(addr)}`);
+                    knownLeftPeers.delete(oldPeerId);
+                    selfAliases.delete(oldPeerId);
+                    canonicalPeerIdByAddr.set(normalizeAddr(addr), newPeerId);
+                    tournamentPlayerAddrLock.delete(normalizeAddr(addr));
+                    connectedPlayers[newPeerId] = {
+                        addr: addr || connectedPlayers[newPeerId]?.addr || null,
+                        name: name || connectedPlayers[newPeerId]?.name || 'Player',
+                        lastSeen: Date.now()
+                    };
+                    ensurePlayerScoreEntry(newPeerId);
+                    debugLog('PEER_CANONICAL_REPLACED', { oldPeerId, newPeerId, addr });
                 }
             }
             const isTournamentMode = gameModeSelect.value === 'webxdc-tournament';
@@ -2650,6 +2694,9 @@
                 // yet when TOURNAMENT_MODE arrived), the move timer interval actually starts.
                 startMoveTimerForCurrentTurn({ resetDeadline: !Number.isFinite(turnDeadlineTs) });
                 updateTournamentMatchDisplay();
+                if (aliasReplacements.length) {
+                    updateTournamentMatchState(tournamentState.pairIndex);
+                }
             }
             debugLog('PEER_LIST_SYNC_APPLIED', {
                 sourcePeerId: sourcePeerId || null,
@@ -2813,19 +2860,36 @@
                 1: typeof state.networkPlayers?.[1] === 'string' ? state.networkPlayers[1] : null,
                 2: typeof state.networkPlayers?.[2] === 'string' ? state.networkPlayers[2] : null
             };
+            const livePeerIds = new Set(
+                [myPeerId, ...Object.keys(connectedPlayers)]
+                    .filter((peerId) => !!peerId && !knownLeftPeers.has(peerId))
+            );
             const previousNetworkPlayers = { 1: networkPlayers[1], 2: networkPlayers[2] };
             const hasLocalSlots = !!networkPlayers[1] || !!networkPlayers[2];
             const hasIncomingSlots = !!incomingNP[1] || !!incomingNP[2];
+            const incomingSlot1Known = !incomingNP[1] || livePeerIds.has(incomingNP[1]);
+            const incomingSlot2Known = !incomingNP[2] || livePeerIds.has(incomingNP[2]);
+            const incomingIsTournamentLive = state.gameMode === 'webxdc-tournament' && !state.tournamentState?.finished;
+            const activeLocalPair = !!networkPlayers[1] && !!networkPlayers[2] && !gameOver;
             networkPlayers = {
                 // For tournament mode, prefer a complete incoming pair to avoid stale local slots
                 // from the previous match causing local "waiting for pairing" desync.
-                1: (state.gameMode === 'webxdc-tournament' && hasIncomingSlots)
+                1: (incomingIsTournamentLive && hasIncomingSlots && incomingSlot1Known)
                     ? incomingNP[1]
                     : incomingNP[1] || networkPlayers[1] || null,
-                2: (state.gameMode === 'webxdc-tournament' && hasIncomingSlots)
+                2: (incomingIsTournamentLive && hasIncomingSlots && incomingSlot2Known)
                     ? incomingNP[2]
                     : incomingNP[2] || networkPlayers[2] || null
             };
+            if (incomingIsTournamentLive && activeLocalPair) {
+                const localPairPeers = [previousNetworkPlayers[1], previousNetworkPlayers[2]].filter(Boolean);
+                const incomingPairPeers = [incomingNP[1], incomingNP[2]].filter(Boolean);
+                const localPairStillLive = localPairPeers.every((peerId) => livePeerIds.has(peerId));
+                const incomingPairComplete = !!incomingNP[1] && !!incomingNP[2];
+                if (localPairStillLive && !incomingPairComplete) {
+                    networkPlayers = previousNetworkPlayers;
+                }
+            }
             if (state.gameMode === 'webxdc-tournament' && hasLocalSlots && hasIncomingSlots
                 && (incomingNP[1] !== networkPlayers[1] || incomingNP[2] !== networkPlayers[2])) {
                 debugLog('TOURNAMENT_SLOTS_REPLACED_FROM_STATE', {
@@ -3062,9 +3126,8 @@
             tournamentState.expiryNotified = false;
             tournamentPlayerAddrLock.clear();
             // Full reset of all per-tournament state so new tournament starts clean.
-            // knownLeftPeers must be cleared so players from the previous tournament can
-            // re-join without being silently blocked by applyPeerListSync.
-            knownLeftPeers.clear();
+            // Do not clear knownLeftPeers here: it preserves leave/rejoin identity handling
+            // during the same shared app session and avoids resurrecting stale identities.
             // Stamp all currently-connected players' lastSeen to now so the exit monitor
             // doesn't falsely evict players whose lastSeen is stale from a previous session.
             // This is critical when a player left+rejoined (getting a new random peerId) and
@@ -3121,7 +3184,7 @@
             // this peer, preventing the 15s stale-detection from prematurely ending matches
             // in the new tournament. Use JOIN for the local initiator (shows notification),
             // PRESENCE for remote receivers (quiet ping that still updates lastSeen).
-            if (window.webxdc) {
+            if (window.webxdc && fromRemote === false && broadcast) {
                 requestPeerListSync('tournament-begin');
                 sendPeerListSync('tournament-begin');
             }
@@ -3375,6 +3438,10 @@
 
                 const localPlayerNumber = getLocalAssignedPlayerNumber();
                 if (gameModeSelect.value === 'webxdc-tournament' && localPlayerNumber !== null && currentPlayer !== localPlayerNumber) {
+                    const activePeerId = networkPlayers[currentPlayer];
+                    if (activePeerId && peerRepresentsLocalPlayer(activePeerId)) {
+                    myAssignedPlayer = currentPlayer;
+                    } else {
                     alert("It is not your turn!");
                     debugLog('MOVE_BLOCKED', {
                         reason: 'tournament-turn-mismatch',
@@ -3384,6 +3451,7 @@
                         networkPlayers
                     });
                     return;
+                    }
                 }
 
                 const activePeerId = networkPlayers[currentPlayer];
@@ -3593,6 +3661,9 @@
                     : cleanPlayerName(currentPlayer === 1 ? p1NameInput.value : p2NameInput.value);
                 turnIndicator.innerHTML = `Current Turn: ${localName} ${color}`;
             } else if (gameModeSelect.value === 'webxdc-tournament') {
+                const assignedSeat = getLocalAssignedPlayerNumber();
+                const turnMatchesSeat = assignedSeat !== null && currentPlayer === assignedSeat;
+                const liveTurnOwner = networkPlayers[currentPlayer] && peerRepresentsLocalPlayer(networkPlayers[currentPlayer]);
                 if (tournamentState.finished) {
                     const standings = getTournamentStandings();
                     const topThree = standings.slice(0, 3);
@@ -3608,7 +3679,7 @@
                 const activePair = networkPlayers[1] && networkPlayers[2];
                 const localPlayerNumber = getLocalAssignedPlayerNumber();
                 const iAmPlaying = localPlayerNumber !== null;
-                const isLocalTurn = localPlayerNumber !== null && currentPlayer === localPlayerNumber;
+                const isLocalTurn = turnMatchesSeat || liveTurnOwner;
                 if (!activePair) {
                     turnIndicator.innerHTML = 'Current Turn: Waiting for pairing';
                 } else if (!iAmPlaying) {

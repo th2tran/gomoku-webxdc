@@ -1,1 +1,1 @@
-window.GOMOKU_APP_VERSION = "0.4.143";
+window.GOMOKU_APP_VERSION = "0.5.146";

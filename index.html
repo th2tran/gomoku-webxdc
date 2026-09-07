@@ -144,16 +144,16 @@
                 repeating-linear-gradient(
                     to right,
                     transparent 0,
-                    transparent calc((100% / 15) - 1px),
-                    rgba(42, 24, 12, 0.55) calc((100% / 15) - 1px),
-                    rgba(42, 24, 12, 0.55) calc(100% / 15)
+                    transparent calc((100% / 14) - 1px),
+                    rgba(42, 24, 12, 0.55) calc((100% / 14) - 1px),
+                    rgba(42, 24, 12, 0.55) calc(100% / 14)
                 ),
                 repeating-linear-gradient(
                     to bottom,
                     transparent 0,
-                    transparent calc((100% / 15) - 1px),
-                    rgba(42, 24, 12, 0.55) calc((100% / 15) - 1px),
-                    rgba(42, 24, 12, 0.55) calc(100% / 15)
+                    transparent calc((100% / 14) - 1px),
+                    rgba(42, 24, 12, 0.55) calc((100% / 14) - 1px),
+                    rgba(42, 24, 12, 0.55) calc(100% / 14)
                 ),
                 radial-gradient(circle, rgba(42, 24, 12, 0.95) 0 3px, transparent 3.6px) 21.428% 21.428% / 100% 100% no-repeat,
                 radial-gradient(circle, rgba(42, 24, 12, 0.95) 0 3px, transparent 3.6px) 50% 21.428% / 100% 100% no-repeat,
@@ -167,10 +167,12 @@
         }
 
         .cell {
-            position: relative;
+            position: absolute;
             cursor: pointer;
             background: transparent;
             z-index: 1;
+            box-sizing: border-box;
+            pointer-events: auto;
         }
 
         .piece {
@@ -2773,8 +2775,38 @@
             return count;
         }
 
+        function getBoardLayoutMetrics() {
+            const style = window.getComputedStyle(boardElement);
+            const inset = Number.parseFloat(style.paddingLeft) || 0;
+            const usableSize = Math.max(0, (boardElement.clientWidth || 0) - (inset * 2));
+            const step = boardSize > 1 ? usableSize / (boardSize - 1) : usableSize;
+            return { inset, usableSize, step };
+        }
+
+        function positionBoardCells() {
+            if (!boardElement) return;
+            const { inset, step } = getBoardLayoutMetrics();
+            const cells = document.querySelectorAll('.cell');
+            const hitbox = Math.min(Math.max(step * 0.9, 16), 32);
+
+            cells.forEach((cell) => {
+                const r = Number.parseInt(cell.dataset.row, 10);
+                const c = Number.parseInt(cell.dataset.col, 10);
+                if (Number.isNaN(r) || Number.isNaN(c)) return;
+
+                const left = inset + (c * step) - (hitbox / 2);
+                const top = inset + (r * step) - (hitbox / 2);
+                cell.style.left = `${left}px`;
+                cell.style.top = `${top}px`;
+                cell.style.width = `${hitbox}px`;
+                cell.style.height = `${hitbox}px`;
+                cell.style.margin = '0';
+            });
+        }
+
         function renderBoardFromState() {
             document.querySelectorAll('.cell .piece').forEach((piece) => piece.remove());
+            positionBoardCells();
             for (let r = 0; r < boardSize; r++) {
                 for (let c = 0; c < boardSize; c++) {
                     const player = board?.[r]?.[c];
@@ -3354,6 +3386,7 @@
                     boardElement.appendChild(cell);
                 }
             }
+            positionBoardCells();
             updateTurnIndicator();
             updateConnectionIndicator();
 
@@ -3861,6 +3894,7 @@
             if (notificationsTabBtn) {
                 notificationsTabBtn.style.top = `${notificationsTabTop}px`;
             }
+            positionBoardCells();
         });
         // --- Fireworks Animation ---
         const canvas = document.getElementById('fireworksCanvas');

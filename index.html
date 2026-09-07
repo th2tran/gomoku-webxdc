@@ -1112,14 +1112,18 @@
         function peerRepresentsLocalPlayer(peerId) {
             if (!peerId) return false;
             if (peerId === myPeerId) return true;
-            // Old canonical IDs we've learned from incoming PEER_LIST_SYNC entries whose
-            // addr === myAddr (e.g. after rejoin with a new random peerId, peers still
-            // broadcast our old canonical in their roster).
-            if (selfAliases.has(peerId)) return true;
+
             const myAddrNorm = normalizeAddr(myAddr);
+            const currentLocalCanonical = myAddrNorm ? findKnownPeerIdByAddr(myAddrNorm) : null;
+
+            // An old canonical alias can still point to us after a rejoin, but it must not
+            // be treated as a second live identity once we have a current canonical record.
+            if (selfAliases.has(peerId)) {
+                return !currentLocalCanonical || currentLocalCanonical === peerId || peerId === myPeerId;
+            }
             if (!myAddrNorm) return false;
-            if (normalizeAddr(connectedPlayers[peerId]?.addr) === myAddrNorm) return true;
-            return findKnownPeerIdByAddr(myAddrNorm) === peerId;
+            if (currentLocalCanonical) return currentLocalCanonical === peerId;
+            return normalizeAddr(connectedPlayers[peerId]?.addr) === myAddrNorm;
         }
 
         function syncMyAssignedPlayer() {
@@ -3134,12 +3138,20 @@
         function beginTournamentMode({ fromRemote = false, pairIndex = 0, schedule = null, countdownDeadlineTs = null, deadlineTs = null, seatSeed = null, cycle = 0, matchNumber = 1, broadcast = true } = {}) {
             const nextSchedule = Array.isArray(schedule) ? schedule : buildTournamentSchedule();
             const nextPairIndex = Number.isInteger(pairIndex) ? pairIndex : 0;
-            const nextCountdownDeadlineTs = Number.isFinite(countdownDeadlineTs)
+            const shouldPreserveTournamentClock = tournamentState.enabled && !tournamentState.finished
+                && Number.isFinite(tournamentState.deadlineTs);
+            const explicitCountdownDeadlineTs = Number.isFinite(countdownDeadlineTs);
+            const explicitDeadlineTs = Number.isFinite(deadlineTs);
+            const nextCountdownDeadlineTs = explicitCountdownDeadlineTs
                 ? countdownDeadlineTs
-                : Date.now() + 10000;
-            const nextDeadlineTs = Number.isFinite(deadlineTs)
+                : shouldPreserveTournamentClock
+                    ? tournamentState.countdownDeadlineTs
+                    : Date.now() + 10000;
+            const nextDeadlineTs = explicitDeadlineTs
                 ? deadlineTs
-                : Date.now() + tournamentDurationMs;
+                : shouldPreserveTournamentClock
+                    ? tournamentState.deadlineTs
+                    : Date.now() + tournamentDurationMs;
             const nextSeatSeed = typeof seatSeed === 'string' && seatSeed ? seatSeed : createSeatSeed();
 
             gameModeSelect.value = 'webxdc-tournament';

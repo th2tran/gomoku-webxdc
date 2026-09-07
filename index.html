@@ -579,8 +579,60 @@
         let localLeaveBroadcastSent = false;
         let tournamentResetPendingTimer = null;
         const debugTitleTapTimes = [];
-        const moveTimeLimitMs = 30000;
+        const moveTimeLimitMs = 5 * 60 * 1000;
         let turnDeadlineTs = null;
+        let playerDeadlineTs = { 1: null, 2: null };
+        let playerRemainingMs = { 1: moveTimeLimitMs, 2: moveTimeLimitMs };
+        let playerTurnStartedAt = { 1: null, 2: null };
+
+        function freezePlayerTimer(playerNumber) {
+            if (!Number.isInteger(playerNumber) || playerNumber < 1 || playerNumber > 2) return;
+            const startedAt = Number.isFinite(playerTurnStartedAt[playerNumber]) ? playerTurnStartedAt[playerNumber] : null;
+            if (startedAt === null) {
+                if (!Number.isFinite(playerRemainingMs[playerNumber])) {
+                    playerRemainingMs[playerNumber] = moveTimeLimitMs;
+                }
+                playerDeadlineTs[playerNumber] = Date.now() + playerRemainingMs[playerNumber];
+                return;
+            }
+            const elapsed = Math.max(0, Date.now() - startedAt);
+            const previousRemaining = Number.isFinite(playerRemainingMs[playerNumber]) ? playerRemainingMs[playerNumber] : moveTimeLimitMs;
+            playerRemainingMs[playerNumber] = Math.max(0, previousRemaining - elapsed);
+            playerDeadlineTs[playerNumber] = Date.now() + playerRemainingMs[playerNumber];
+            playerTurnStartedAt[playerNumber] = null;
+        }
+
+        function activatePlayerTimer(playerNumber) {
+            if (!Number.isInteger(playerNumber) || playerNumber < 1 || playerNumber > 2) return;
+            const remaining = Number.isFinite(playerRemainingMs[playerNumber]) ? playerRemainingMs[playerNumber] : moveTimeLimitMs;
+            const now = Date.now();
+            playerRemainingMs[playerNumber] = Math.max(0, remaining);
+            playerTurnStartedAt[playerNumber] = now;
+            playerDeadlineTs[playerNumber] = now + playerRemainingMs[playerNumber];
+            turnDeadlineTs = playerDeadlineTs[playerNumber];
+        }
+
+        function resetPlayerGameClocks() {
+            const now = Date.now();
+            playerRemainingMs = {
+                1: moveTimeLimitMs,
+                2: moveTimeLimitMs
+            };
+            playerTurnStartedAt = {
+                1: currentPlayer === 1 ? now : null,
+                2: currentPlayer === 2 ? now : null
+            };
+            playerDeadlineTs = {
+                1: now + moveTimeLimitMs,
+                2: now + moveTimeLimitMs
+            };
+            if (currentPlayer === 1) {
+                playerDeadlineTs[1] = now + moveTimeLimitMs;
+            } else if (currentPlayer === 2) {
+                playerDeadlineTs[2] = now + moveTimeLimitMs;
+            }
+            turnDeadlineTs = playerDeadlineTs[currentPlayer];
+        }
         let moveTimerInterval = null;
         let timeoutResolutionInFlight = false;
         const tournamentPlayerAddrLock = new Map(); // addr → peerId: first device that claimed a tournament slot for that addr
@@ -1505,22 +1557,23 @@
                 moveTimerEl.style.color = '#c8d6e5';
                 return;
             }
-            if (!shouldRunMoveTimer()) {
-                moveTimerEl.textContent = gameModeSelect.value === 'webxdc'
-                    ? 'Move Timer: waiting for active player'
-                    : `Move Timer: --${tournamentText}`;
+
+            const localPlayerNumber = getLocalAssignedPlayerNumber();
+            const isActiveParticipant = Number.isInteger(localPlayerNumber) && !!networkPlayers[1] && !!networkPlayers[2];
+            if (!isActiveParticipant) {
+                moveTimerEl.textContent = `Move Timer: --${tournamentText}`;
                 moveTimerEl.style.color = '#c8d6e5';
                 return;
             }
-            if (!Number.isFinite(turnDeadlineTs)) {
-                moveTimerEl.textContent = `Move Timer: 30s${tournamentText}`;
-                moveTimerEl.style.color = '#c8d6e5';
-                return;
-            }
-            const remainingMs = Math.max(0, turnDeadlineTs - Date.now());
-            const remainingSec = Math.ceil(remainingMs / 1000);
-            moveTimerEl.textContent = `Move Timer: ${remainingSec}s${tournamentText}`;
-            moveTimerEl.style.color = remainingSec <= 5 ? '#ff7675' : remainingSec <= 10 ? '#f6c90e' : '#c8d6e5';
+
+            const displayPlayer = localPlayerNumber;
+            const remainingBase = Number.isFinite(playerRemainingMs[displayPlayer]) ? playerRemainingMs[displayPlayer] : moveTimeLimitMs;
+            const elapsedMs = Number.isFinite(playerTurnStartedAt[displayPlayer]) && displayPlayer === currentPlayer
+                ? Math.max(0, Date.now() - playerTurnStartedAt[displayPlayer])
+                : 0;
+            const remainingMs = Math.max(0, remainingBase - elapsedMs);
+            moveTimerEl.textContent = `Move Timer: ${formatClockDuration(remainingMs)}${tournamentText}`;
+            moveTimerEl.style.color = remainingMs <= 10000 ? '#ff7675' : remainingMs <= 30000 ? '#f6c90e' : '#c8d6e5';
         }
 
         function applyMoveTimeoutResult({ loserPlayer, winnerPlayer, loserPeerId = null, winnerPeerId = null, source = 'unknown' }) {
@@ -1627,9 +1680,18 @@
                 updateMoveTimerDisplay();
                 return;
             }
-            if (shouldReset || !Number.isFinite(turnDeadlineTs)) {
-                turnDeadlineTs = Date.now() + moveTimeLimitMs;
+            if (shouldReset) {
+                const now = Date.now();
+                playerRemainingMs[currentPlayer] = moveTimeLimitMs;
+                playerTurnStartedAt[currentPlayer] = now;
+                playerDeadlineTs[currentPlayer] = now + moveTimeLimitMs;
+            } else if (!Number.isFinite(playerTurnStartedAt[currentPlayer])) {
+                activatePlayerTimer(currentPlayer);
             }
+            if (!Number.isFinite(playerTurnStartedAt[currentPlayer])) {
+                activatePlayerTimer(currentPlayer);
+            }
+            turnDeadlineTs = playerDeadlineTs[currentPlayer];
             if (!moveTimerInterval) {
                 moveTimerInterval = setInterval(tickMoveTimer, 250);
             }
@@ -2842,6 +2904,7 @@
                     gameOver,
                     moveCount: countMoves(board),
                     turnDeadlineTs,
+                    playerDeadlineTs: { 1: playerDeadlineTs[1], 2: playerDeadlineTs[2] },
                     gameMode: gameModeSelect.value,
                     tournamentState: {
                         enabled: tournamentState.enabled,
@@ -2889,6 +2952,15 @@
             currentPlayer = state.currentPlayer === 2 ? 2 : 1;
             gameOver = !!state.gameOver;
             turnDeadlineTs = Number.isFinite(state.turnDeadlineTs) ? state.turnDeadlineTs : null;
+            if (state.playerDeadlineTs && typeof state.playerDeadlineTs === 'object') {
+                playerDeadlineTs = {
+                    1: Number.isFinite(state.playerDeadlineTs[1]) ? state.playerDeadlineTs[1] : null,
+                    2: Number.isFinite(state.playerDeadlineTs[2]) ? state.playerDeadlineTs[2] : null
+                };
+                if (!Number.isFinite(turnDeadlineTs) && Number.isFinite(playerDeadlineTs[currentPlayer])) {
+                    turnDeadlineTs = playerDeadlineTs[currentPlayer];
+                }
+            }
             // Merge incoming networkPlayers: prefer non-null incoming value, but keep existing
             // non-null slot if the incoming STATE has null (e.g. first-mover's STATE sent before
             // second player claimed a seat). Overwriting with null triggers unwanted re-randomization.
@@ -3321,6 +3393,7 @@
             board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
             gameOver = false;
             currentPlayer = 1;
+            resetPlayerGameClocks();
             isComputerThinking = false;
             stopFireworks();
 
@@ -3573,9 +3646,11 @@
                 stopMoveTimerInterval();
                 handleWin(currentPlayer);
             } else {
-                currentPlayer = currentPlayer === 1 ? 2 : 1;
+                const previousPlayer = currentPlayer;
+                freezePlayerTimer(previousPlayer);
+                currentPlayer = previousPlayer === 1 ? 2 : 1;
                 updateTurnIndicator();
-                startMoveTimerForCurrentTurn({ resetDeadline: true });
+                startMoveTimerForCurrentTurn({ resetDeadline: false });
 
                 maybeStartComputerTurn();
             }

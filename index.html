@@ -199,7 +199,7 @@
             border: 1px solid rgba(0,0,0,0.18);
         }
 
-        .controls { margin-top: 20px; display: flex; gap: 15px; flex-wrap: wrap; justify-content: center; }
+        .controls { margin-top: 20px; display: flex; gap: 15px; flex-wrap: wrap; justify-content: center; align-items: center; }
         select, button { padding: 10px 15px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; }
         select { background-color: #ecf0f1; color: #2c3e50; font-weight: bold; }
         button { background-color: #27ae60; color: white; transition: background 0.3s; }
@@ -462,7 +462,7 @@
             <option value="pvp">Local Pass & Play</option>
             <option value="pve">Local vs Computer</option>
         </select>
-        <button id="reset-btn">Reset Board / Sync</button>
+    <button id="reset-btn">Reset Board / Sync</button>
     </div>
 
     <canvas id="fireworksCanvas"></canvas>
@@ -569,6 +569,8 @@
         let gameStartAnnounced = false;
         let webxdcSeatSeed = null;
         let pveComputerPlayer = 2;
+        let computerWorker = null;
+        let computerMoveRequestToken = 0;
         const playerStaleMs = 15000;
         const knownLeftPeers = new Set();
         // Old session peerIds that refer to us (collected from incoming PEER_LIST_SYNC entries
@@ -732,17 +734,19 @@
 
         function updateNotificationsPanelState() {
             if (!notificationsPopup) return;
-            notificationsPopup.classList.toggle('visible', true);
-            notificationsPopup.classList.toggle('minimized', notificationsMinimized);
-            notificationsPopup.setAttribute('aria-hidden', 'false');
+            const shouldBeMinimized = !!notificationsMinimized;
+            notificationsPopup.classList.toggle('visible', !shouldBeMinimized);
+            notificationsPopup.classList.toggle('minimized', shouldBeMinimized);
+            notificationsPopup.setAttribute('aria-hidden', shouldBeMinimized ? 'true' : 'false');
             if (notificationsToggleBtn) {
-                notificationsToggleBtn.textContent = notificationsMinimized ? '◀' : '▶';
-                notificationsToggleBtn.setAttribute('aria-label', notificationsMinimized ? 'Expand notifications' : 'Collapse notifications');
+                notificationsToggleBtn.textContent = shouldBeMinimized ? '◀' : '▶';
+                notificationsToggleBtn.setAttribute('aria-label', shouldBeMinimized ? 'Expand notifications' : 'Collapse notifications');
             }
             if (notificationsTabBtn) {
                 notificationsTabBtn.textContent = '◀';
-                notificationsTabBtn.setAttribute('aria-hidden', notificationsMinimized ? 'false' : 'true');
-                notificationsTabBtn.setAttribute('aria-label', 'Expand notifications');
+                notificationsTabBtn.setAttribute('aria-hidden', shouldBeMinimized ? 'false' : 'true');
+                notificationsTabBtn.setAttribute('aria-label', shouldBeMinimized ? 'Expand notifications' : 'Collapse notifications');
+                notificationsTabBtn.style.display = shouldBeMinimized ? 'block' : 'none';
                 notificationsTabBtn.style.top = `${notificationsTabTop}px`;
             }
             updateSidePanelLayoutClass();
@@ -824,6 +828,14 @@
 
         function showDebugPanel() {
             debugPopup.classList.add('visible');
+            try {
+                const devtoolsWindow = window.open('about:blank', '_blank');
+                if (devtoolsWindow) {
+                    devtoolsWindow.document.write('<!doctype html><title>DevTools</title><h3>Open browser DevTools for this window: Cmd/Ctrl+Shift+I</h3>');
+                    devtoolsWindow.document.close();
+                    devtoolsWindow.focus();
+                }
+            } catch (_) {}
             debugPopup.setAttribute('aria-hidden', 'false');
             if (!debugPopup.style.left && !debugPopup.style.top) {
                 const popupWidth = debugPopup.getBoundingClientRect().width;
@@ -844,6 +856,7 @@
         }
 
         function showNotificationsPanel() {
+            notificationsMinimized = false;
             notificationsPopup.classList.add('visible');
             notificationsPopup.style.top = '0';
             notificationsPopup.style.right = '0';
@@ -1155,10 +1168,50 @@
             return gameModeSelect.value === 'pve' && playerNumber === pveComputerPlayer;
         }
 
+        function createComputerWorker() {
+            if (computerWorker) return computerWorker;
+
+            const worker = new Worker('worker.js');
+            worker.onmessage = (event) => {
+                const payload = event.data || {};
+                const activeToken = Number.isInteger(payload.token) ? payload.token : null;
+                if (activeToken === null || activeToken !== computerMoveRequestToken) {
+                    return;
+                }
+                const move = payload.move;
+                if (gameOver || !isComputerPlayer(currentPlayer) || !move || !Number.isInteger(move.r) || !Number.isInteger(move.c)) {
+                    isComputerThinking = false;
+                    return;
+                }
+                isComputerThinking = false;
+                applyPieceLocally(move.r, move.c);
+            };
+            worker.onerror = () => {
+                isComputerThinking = false;
+            };
+            computerWorker = worker;
+            return worker;
+        }
+
         function maybeStartComputerTurn() {
             if (gameModeSelect.value !== 'pve' || gameOver || isComputerThinking || !isComputerPlayer(currentPlayer)) return;
             isComputerThinking = true;
-            setTimeout(makeComputerMove, 400);
+            const delayMs = 200;
+            const requestToken = ++computerMoveRequestToken;
+            setTimeout(() => {
+                if (gameOver || !isComputerPlayer(currentPlayer)) {
+                    isComputerThinking = false;
+                    return;
+                }
+                if (requestToken !== computerMoveRequestToken) return;
+                const worker = createComputerWorker();
+                worker.postMessage({
+                    board: cloneBoardState(board),
+                    aiPlayer: pveComputerPlayer,
+                    humanPlayer: pveComputerPlayer === 1 ? 2 : 1,
+                    token: requestToken
+                });
+            }, delayMs);
         }
 
         function peerRepresentsLocalPlayer(peerId) {
@@ -1519,6 +1572,7 @@
 
         function shouldRunMoveTimer() {
             if (gameOver || !Array.isArray(board) || board.length !== boardSize) return false;
+            if (gameModeSelect.value === 'pve' || gameModeSelect.value === 'pvp') return true;
             if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return true;
 
             const localPlayerNumber = getLocalAssignedPlayerNumber();
@@ -1555,6 +1609,18 @@
             if (gameOver) {
                 moveTimerEl.textContent = `Move Timer: --${tournamentText}`;
                 moveTimerEl.style.color = '#c8d6e5';
+                return;
+            }
+
+            if (gameModeSelect.value === 'pve') {
+                const displayPlayer = currentPlayer;
+                const remainingBase = Number.isFinite(playerRemainingMs[displayPlayer]) ? playerRemainingMs[displayPlayer] : moveTimeLimitMs;
+                const elapsedMs = Number.isFinite(playerTurnStartedAt[displayPlayer]) && displayPlayer === currentPlayer
+                    ? Math.max(0, Date.now() - playerTurnStartedAt[displayPlayer])
+                    : 0;
+                const remainingMs = Math.max(0, remainingBase - elapsedMs);
+                moveTimerEl.textContent = `Move Timer: ${formatClockDuration(remainingMs)}${tournamentText}`;
+                moveTimerEl.style.color = remainingMs <= 10000 ? '#ff7675' : remainingMs <= 30000 ? '#f6c90e' : '#c8d6e5';
                 return;
             }
 
@@ -2334,27 +2400,39 @@
         function updateAllPlayersScoreboard() {
             if (!allPlayersScoreboard) return;
 
-            const peerIds = new Set([
-                ...Object.keys(playerScoresByPeer),
-                ...Object.keys(connectedPlayers),
-                myPeerId
-            ]);
+            let rows = [];
+            if (gameModeSelect.value === 'pve') {
+                const humanPlayer = pveComputerPlayer === 1 ? 2 : 1;
+                const computerPlayer = pveComputerPlayer;
+                const humanName = cleanPlayerName(humanPlayer === 1 ? p1NameInput.value : p2NameInput.value) || 'Player';
+                const computerName = cleanPlayerName(computerPlayer === 1 ? p1NameInput.value : p2NameInput.value) || 'Computer';
+                rows = [
+                    { name: humanName, score: scores[humanPlayer] || 0 },
+                    { name: computerName, score: scores[computerPlayer] || 0 }
+                ];
+            } else {
+                const peerIds = new Set([
+                    ...Object.keys(playerScoresByPeer),
+                    ...Object.keys(connectedPlayers),
+                    myPeerId
+                ]);
 
-            const rows = Array.from(peerIds)
-                .filter((peerId) => !!peerId && !knownLeftPeers.has(peerId))
-                .map((peerId) => {
-                    ensurePlayerScoreEntry(peerId);
-                    const isLocalPeer = peerRepresentsLocalPlayer(peerId);
-                    return {
-                        peerId,
-                        name: `${displayNameForPeer(peerId)}${isLocalPeer ? ' (you)' : ''}`,
-                        score: playerScoresByPeer[peerId] || 0
-                    };
-                })
-                .sort((a, b) => {
-                    if (b.score !== a.score) return b.score - a.score;
-                    return a.name.localeCompare(b.name);
-                });
+                rows = Array.from(peerIds)
+                    .filter((peerId) => !!peerId && !knownLeftPeers.has(peerId))
+                    .map((peerId) => {
+                        ensurePlayerScoreEntry(peerId);
+                        const isLocalPeer = peerRepresentsLocalPlayer(peerId);
+                        return {
+                            peerId,
+                            name: `${displayNameForPeer(peerId)}${isLocalPeer ? ' (you)' : ''}`,
+                            score: playerScoresByPeer[peerId] || 0
+                        };
+                    })
+                    .sort((a, b) => {
+                        if (b.score !== a.score) return b.score - a.score;
+                        return a.name.localeCompare(b.name);
+                    });
+            }
 
             allPlayersScoreboard.innerHTML = '';
             const title = document.createElement('h3');
@@ -3657,25 +3735,372 @@
         }
 
         // --- AI Logic ---
-        function makeComputerMove() {
-            const aiPlayer = isComputerPlayer(1) ? 1 : 2;
-            const humanPlayer = aiPlayer === 1 ? 2 : 1;
-            let bestScore = -1; let bestMoves = [];
+        function cloneBoardState(sourceBoard) {
+            return sourceBoard.map((row) => row.slice());
+        }
+
+        function checkWinOnBoardState(stateBoard, r, c, player) {
+            const directions = [
+                [[0, 1], [0, -1]],
+                [[1, 0], [-1, 0]],
+                [[1, 1], [-1, -1]],
+                [[1, -1], [-1, 1]]
+            ];
+            for (const dir of directions) {
+                let count = 1;
+                for (const delta of dir) {
+                    let nr = r + delta[0];
+                    let nc = c + delta[1];
+                    while (nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize && stateBoard[nr][nc] === player) {
+                        count++;
+                        nr += delta[0];
+                        nc += delta[1];
+                    }
+                }
+                if (count >= 5) return true;
+            }
+            return false;
+        }
+
+        function evaluatePositionOnBoard(stateBoard, r, c, player) {
+            let score = 0;
+            const directions = [ [[0,1], [0,-1]], [[1,0], [-1,0]], [[1,1], [-1,-1]], [[1,-1], [-1,1]] ];
+            for (const dir of directions) {
+                let count = 1;
+                let openEnds = 0;
+                for (const delta of dir) {
+                    let nr = r + delta[0], nc = c + delta[1];
+                    while (nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize && stateBoard[nr][nc] === player) {
+                        count++;
+                        nr += delta[0];
+                        nc += delta[1];
+                    }
+                    if (nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize && stateBoard[nr][nc] === 0) openEnds++;
+                }
+                if (count >= 5) score += 100000;
+                else if (count === 4 && openEnds === 2) score += 10000;
+                else if (count === 4 && openEnds === 1) score += 1000;
+                else if (count === 3 && openEnds === 2) score += 1000;
+                else if (count === 3 && openEnds === 1) score += 120;
+                else if (count === 2 && openEnds === 2) score += 80;
+                else if (count === 2 && openEnds === 1) score += 12;
+                else if (count === 1 && openEnds === 2) score += 2;
+            }
+            return score;
+        }
+
+        function evaluateBoardState(stateBoard, player) {
+            let score = 0;
+            const opponent = player === 1 ? 2 : 1;
             for (let r = 0; r < boardSize; r++) {
                 for (let c = 0; c < boardSize; c++) {
-                    if (board[r][c] === 0) {
-                        let scoreAI = evaluatePosition(r, c, aiPlayer); 
-                        let scoreHuman = evaluatePosition(r, c, humanPlayer);
-                        let totalScore = scoreAI + (scoreHuman * 0.95); 
-                        if (totalScore > bestScore) { bestScore = totalScore; bestMoves = [{r, c}]; } 
-                        else if (totalScore === bestScore) { bestMoves.push({r, c}); }
+                    if (stateBoard[r][c] === 0) {
+                        score += evaluatePositionOnBoard(stateBoard, r, c, player);
+                        score -= evaluatePositionOnBoard(stateBoard, r, c, opponent) * 0.9;
                     }
                 }
             }
-            let chosenMove = bestMoves[Math.floor(Math.random() * bestMoves.length)];
-            if (bestScore === 0) chosenMove = {r: Math.floor(boardSize/2), c: Math.floor(boardSize/2)};
-            isComputerThinking = false;
-            applyPieceLocally(chosenMove.r, chosenMove.c);
+            return score;
+        }
+
+        function minimaxComputerBoard(stateBoard, playerToMove, maximizingPlayer, depth, alpha, beta) {
+            const opponent = playerToMove === 1 ? 2 : 1;
+            const legalMoves = [];
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (stateBoard[r][c] === 0) legalMoves.push({ r, c });
+                }
+            }
+
+            if (!legalMoves.length) return evaluateBoardState(stateBoard, maximizingPlayer);
+
+            const immediateWins = findImmediateWinningMoves(stateBoard, playerToMove);
+            if (immediateWins.length) {
+                if (playerToMove === maximizingPlayer) return 300000 + depth;
+                return -300000 - depth;
+            }
+
+            if (depth === 0) return evaluateBoardState(stateBoard, maximizingPlayer);
+
+            const opponentThreats = findImmediateWinningMoves(stateBoard, opponent);
+            const candidateMoves = opponentThreats.length
+                ? legalMoves.filter((move) => opponentThreats.some((threat) => threat.r === move.r && threat.c === move.c))
+                : legalMoves.slice(0, Math.min(12, legalMoves.length));
+
+            if (opponentThreats.length && playerToMove === maximizingPlayer && candidateMoves.length > 0) {
+                let bestBlockScore = Infinity;
+                for (const move of candidateMoves) {
+                    stateBoard[move.r][move.c] = playerToMove;
+                    const score = minimaxComputerBoard(stateBoard, opponent, maximizingPlayer, depth - 1, alpha, beta);
+                    stateBoard[move.r][move.c] = 0;
+                    bestBlockScore = Math.min(bestBlockScore, score);
+                }
+                return bestBlockScore;
+            }
+
+            if (playerToMove === maximizingPlayer) {
+                let bestScore = -Infinity;
+                for (const move of candidateMoves) {
+                    stateBoard[move.r][move.c] = playerToMove;
+                    const score = minimaxComputerBoard(stateBoard, opponent, maximizingPlayer, depth - 1, alpha, beta);
+                    stateBoard[move.r][move.c] = 0;
+                    bestScore = Math.max(bestScore, score);
+                    alpha = Math.max(alpha, bestScore);
+                    if (beta <= alpha) break;
+                }
+                return bestScore;
+            }
+
+            let bestScore = Infinity;
+            for (const move of candidateMoves) {
+                stateBoard[move.r][move.c] = playerToMove;
+                const score = minimaxComputerBoard(stateBoard, opponent, maximizingPlayer, depth - 1, alpha, beta);
+                stateBoard[move.r][move.c] = 0;
+                bestScore = Math.min(bestScore, score);
+                beta = Math.min(beta, bestScore);
+                if (beta <= alpha) break;
+            }
+            return bestScore;
+        }
+
+        function findImmediateWinningMoves(stateBoard, player) {
+            const wins = [];
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (stateBoard[r][c] !== 0) continue;
+                    stateBoard[r][c] = player;
+                    if (checkWinOnBoardState(stateBoard, r, c, player)) {
+                        wins.push({ r, c });
+                    }
+                    stateBoard[r][c] = 0;
+                }
+            }
+            return wins;
+        }
+
+        function analyzeLineThreat(stateBoard, r, c, player, dr, dc) {
+            let backward = 0;
+            let nr = r - dr;
+            let nc = c - dc;
+            while (nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize && stateBoard[nr][nc] === player) {
+                backward++;
+                nr -= dr;
+                nc -= dc;
+            }
+            const openBackward = nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize && stateBoard[nr][nc] === 0;
+
+            let forward = 0;
+            nr = r + dr;
+            nc = c + dc;
+            while (nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize && stateBoard[nr][nc] === player) {
+                forward++;
+                nr += dr;
+                nc += dc;
+            }
+            const openForward = nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize && stateBoard[nr][nc] === 0;
+
+            return {
+                length: backward + forward + 1,
+                openEnds: (openBackward ? 1 : 0) + (openForward ? 1 : 0),
+                openBackward,
+                openForward
+            };
+        }
+
+        function getThreatCells(stateBoard, player) {
+            const threats = new Map();
+            const directions = [[0, 1], [1, 0], [1, 1], [1, -1]];
+
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (stateBoard[r][c] !== 0) continue;
+
+                    let score = 0;
+                    let severity = 0;
+                    stateBoard[r][c] = player;
+
+                    for (const [dr, dc] of directions) {
+                        const line = analyzeLineThreat(stateBoard, r, c, player, dr, dc);
+                        if (line.length >= 5) {
+                            severity = Math.max(severity, 5);
+                            score += 4000000;
+                        } else if (line.length === 4 && line.openEnds === 2) {
+                            severity = Math.max(severity, 4);
+                            score += 900000;
+                        } else if (line.length === 4 && line.openEnds === 1) {
+                            severity = Math.max(severity, 3);
+                            score += 180000;
+                        } else if (line.length === 3 && line.openEnds === 2) {
+                            severity = Math.max(severity, 2);
+                            score += 70000;
+                        } else if (line.length === 3 && line.openEnds === 1) {
+                            severity = Math.max(severity, 1);
+                            score += 12000;
+                        }
+                    }
+
+                    stateBoard[r][c] = 0;
+                    if (score <= 0) continue;
+                    threats.set(r + ',' + c, { r, c, score, severity });
+                }
+            }
+
+            return Array.from(threats.values()).sort((a, b) => b.score - a.score);
+        }
+
+        function getRandomEmptyCell(stateBoard) {
+            const emptyCells = [];
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (stateBoard[r][c] === 0) {
+                        emptyCells.push({ r, c });
+                    }
+                }
+            }
+            if (!emptyCells.length) return null;
+            return emptyCells[Math.floor(Math.random() * emptyCells.length)];
+        }
+
+        function findRecentHumanThreats(stateBoard, aiPlayer, humanPlayer) {
+            const humanThreats = getThreatCells(stateBoard, humanPlayer);
+            if (!humanThreats.length) return [];
+
+            const urgentThreats = humanThreats.filter((threat) => threat.severity >= 2);
+            if (!urgentThreats.length) return [];
+
+            const scoredBlocks = new Map();
+            for (const threat of urgentThreats) {
+                const blockKey = `${threat.r},${threat.c}`;
+                if (!scoredBlocks.has(blockKey)) {
+                    scoredBlocks.set(blockKey, { r: threat.r, c: threat.c, score: 0 });
+                }
+                scoredBlocks.get(blockKey).score += threat.score;
+            }
+
+            const defensiveReplies = getThreatCells(stateBoard, aiPlayer);
+            for (const reply of defensiveReplies) {
+                const key = `${reply.r},${reply.c}`;
+                if (!scoredBlocks.has(key)) continue;
+                scoredBlocks.get(key).score += reply.score * 0.35;
+            }
+
+            return Array.from(scoredBlocks.values()).sort((a, b) => b.score - a.score);
+        }
+
+        function evaluateDangerBeforeAttack(stateBoard, aiPlayer, humanPlayer, depthRemaining) {
+            if (countMoves(stateBoard) <= 1) return 0;
+
+            let bestDefensiveScore = -Infinity;
+            const emptyMoves = [];
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (stateBoard[r][c] !== 0) continue;
+                    emptyMoves.push({ r, c });
+                }
+            }
+
+            for (const move of emptyMoves) {
+                const testBoard = cloneBoardState(stateBoard);
+                testBoard[move.r][move.c] = aiPlayer;
+
+                const aiWinsNow = findImmediateWinningMoves(testBoard, aiPlayer);
+                const humanThreats = findImmediateWinningMoves(testBoard, humanPlayer);
+                let score = 0;
+
+                if (aiWinsNow.length) score += 300000 + (aiWinsNow.length * 50000);
+                if (humanThreats.length) score -= 500000 + (humanThreats.length * 200000);
+
+                const blockingCells = new Set(humanThreats.map((threat) => `${threat.r},${threat.c}`));
+                if (blockingCells.has(`${move.r},${move.c}`)) score += 250000;
+
+                if (depthRemaining > 0 && countMoves(testBoard) <= 12) {
+                    const futureHumanWins = [];
+                    for (const humanMove of emptyMoves) {
+                        if (humanMove.r === move.r && humanMove.c === move.c) continue;
+                        const replyBoard = cloneBoardState(testBoard);
+                        replyBoard[humanMove.r][humanMove.c] = humanPlayer;
+                        const replyHumanWins = findImmediateWinningMoves(replyBoard, humanPlayer);
+                        for (const win of replyHumanWins) {
+                            futureHumanWins.push(win);
+                        }
+                    }
+                    score -= futureHumanWins.length * 120000;
+                }
+
+                score += evaluatePositionOnBoard(testBoard, move.r, move.c, aiPlayer) * 8;
+                score -= evaluatePositionOnBoard(testBoard, move.r, move.c, humanPlayer) * 12;
+
+                bestDefensiveScore = Math.max(bestDefensiveScore, score);
+            }
+            return bestDefensiveScore;
+        }
+
+        function getDefensiveMoveCandidates(stateBoard, aiPlayer, humanPlayer, defenseDepth) {
+            const immediateHumanWins = findImmediateWinningMoves(stateBoard, humanPlayer);
+            if (immediateHumanWins.length) {
+                const uniqueBlocks = [];
+                const seen = new Set();
+                for (const threat of immediateHumanWins) {
+                    const id = `${threat.r},${threat.c}`;
+                    if (!seen.has(id)) {
+                        seen.add(id);
+                        uniqueBlocks.push({ r: threat.r, c: threat.c, score: 5000000 });
+                    }
+                }
+                return uniqueBlocks;
+            }
+
+            const candidates = [];
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (stateBoard[r][c] !== 0) continue;
+                    const nextBoard = cloneBoardState(stateBoard);
+                    nextBoard[r][c] = aiPlayer;
+                    const humanThreats = findImmediateWinningMoves(nextBoard, humanPlayer);
+                    let score = 0;
+
+                    if (humanThreats.length) {
+                        score -= 250000 * humanThreats.length;
+                    }
+
+                    const aiWins = findImmediateWinningMoves(nextBoard, aiPlayer);
+                    if (aiWins.length) score += 200000 * aiWins.length;
+
+                    const futureDanger = evaluateDangerBeforeAttack(nextBoard, aiPlayer, humanPlayer, defenseDepth - 1);
+                    score += futureDanger * 0.25;
+
+                    score += evaluatePositionOnBoard(stateBoard, r, c, aiPlayer) * 12;
+                    score -= evaluatePositionOnBoard(stateBoard, r, c, humanPlayer) * 14;
+
+                    candidates.push({ r, c, score });
+                }
+            }
+            candidates.sort((a, b) => b.score - a.score);
+            return candidates.slice(0, 8);
+        }
+
+        function getHardMoveCandidates(stateBoard, aiPlayer, humanPlayer, defenseDepth) {
+            const defenseMoves = getDefensiveMoveCandidates(stateBoard, aiPlayer, humanPlayer, defenseDepth);
+            if (defenseMoves.length) {
+                return defenseMoves;
+            }
+
+            const moves = [];
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (stateBoard[r][c] !== 0) continue;
+                    const nextBoard = cloneBoardState(stateBoard);
+                    nextBoard[r][c] = aiPlayer;
+                    const aiWins = findImmediateWinningMoves(nextBoard, aiPlayer).length;
+                    const humanThreats = findImmediateWinningMoves(nextBoard, humanPlayer).length;
+                    const score = (aiWins * 300000) - (humanThreats * 400000)
+                        + evaluatePositionOnBoard(stateBoard, r, c, aiPlayer) * 8
+                        - evaluatePositionOnBoard(stateBoard, r, c, humanPlayer) * 10;
+                    moves.push({ r, c, score });
+                }
+            }
+            moves.sort((a, b) => b.score - a.score);
+            return moves.slice(0, 8);
         }
 
         function evaluatePosition(r, c, player) {

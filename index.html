@@ -1199,6 +1199,8 @@
             const isPve = gameModeSelect.value === 'pve';
             difficultyControl.hidden = !isPve;
             difficultySelect.disabled = !isPve;
+            difficultyControl.style.display = isPve ? '' : 'none';
+            difficultySelect.hidden = !isPve;
         }
 
         if (difficultySelect) {
@@ -3334,6 +3336,7 @@
                 }
             }
             resetBtn.disabled = tournamentInProgress;
+            updateDifficultyControlVisibility();
         }
 
         function resetTournamentProgress(seatSeed = createSeatSeed(), deadlineTs = Date.now() + tournamentDurationMs) {

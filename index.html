@@ -847,14 +847,6 @@
 
         function showDebugPanel() {
             debugPopup.classList.add('visible');
-            try {
-                const devtoolsWindow = window.open('about:blank', '_blank');
-                if (devtoolsWindow) {
-                    devtoolsWindow.document.write('<!doctype html><title>DevTools</title><h3>Open browser DevTools for this window: Cmd/Ctrl+Shift+I</h3>');
-                    devtoolsWindow.document.close();
-                    devtoolsWindow.focus();
-                }
-            } catch (_) {}
             debugPopup.setAttribute('aria-hidden', 'false');
             if (!debugPopup.style.left && !debugPopup.style.top) {
                 const popupWidth = debugPopup.getBoundingClientRect().width;
@@ -929,6 +921,7 @@
             playGameStartSound();
             gameStartAnnounced = true;
             debugLog('GAME_START_ANNOUNCED', { source, p1Owner, p2Owner });
+            debugLog('GAME_STARTED', { source, p1Owner, p2Owner, noteText });
         }
 
         function maybeAnnounceLocalGameStart(source = 'unknown') {
@@ -944,6 +937,7 @@
             playGameStartSound();
             gameStartAnnounced = true;
             debugLog('GAME_START_ANNOUNCED', { source, p1Owner: null, p2Owner: null });
+            debugLog('GAME_STARTED', { source, p1Owner: null, p2Owner: null, noteText });
         }
 
         function updateCurrentMatchDisplay() {
@@ -1203,6 +1197,7 @@
             if (computerWorker) return computerWorker;
 
             const worker = new Worker('worker.js');
+            let lastComputerRequestAt = 0;
             worker.onmessage = (event) => {
                 const payload = event.data || {};
                 if (payload.type === 'progress') {
@@ -1213,18 +1208,59 @@
                 if (activeToken === null || activeToken !== computerMoveRequestToken) {
                     return;
                 }
+                const elapsedMs = lastComputerRequestAt ? Date.now() - lastComputerRequestAt : null;
                 const move = payload.move;
+                if (!move) {
+                    isComputerThinking = false;
+                    debugLog('COMPUTER_TURN_FINISHED', {
+                        token: activeToken,
+                        move: null,
+                        player: currentPlayer,
+                        reason: 'worker-returned-null',
+                        elapsedMs
+                    });
+                    return;
+                }
                 if (gameOver || !isComputerPlayer(currentPlayer) || !move || !Number.isInteger(move.r) || !Number.isInteger(move.c)) {
                     isComputerThinking = false;
+                    debugLog('COMPUTER_TURN_FINISHED', {
+                        token: activeToken,
+                        move,
+                        player: currentPlayer,
+                        reason: 'invalid-state',
+                        elapsedMs
+                    });
                     return;
                 }
                 isComputerThinking = false;
+                debugLog('COMPUTER_TURN_FINISHED', {
+                    token: activeToken,
+                    move,
+                    player: currentPlayer,
+                    elapsedMs
+                });
                 applyPieceLocally(move.r, move.c);
             };
             worker.onerror = () => {
                 isComputerThinking = false;
+                debugLog('COMPUTER_TURN_FINISHED', {
+                    token: computerMoveRequestToken,
+                    move: null,
+                    player: currentPlayer,
+                    reason: 'worker-error'
+                });
+            };
+            worker.onmessageerror = () => {
+                isComputerThinking = false;
+                debugLog('COMPUTER_TURN_FINISHED', {
+                    token: computerMoveRequestToken,
+                    move: null,
+                    player: currentPlayer,
+                    reason: 'worker-message-error'
+                });
             };
             computerWorker = worker;
+            computerWorker._setLastRequestAt = (ts) => { lastComputerRequestAt = ts; };
             return worker;
         }
 
@@ -1233,6 +1269,12 @@
             isComputerThinking = true;
             const delayMs = 200;
             const requestToken = ++computerMoveRequestToken;
+            debugLog('COMPUTER_BOARD_STATE', {
+                token: requestToken,
+                player: currentPlayer,
+                moveCount: countMoves(board),
+                board: board.map((row) => row.join(''))
+            });
             debugLog('COMPUTER_TURN_STARTED', {
                 token: requestToken,
                 depth: getSelectedDifficultyDepth(),
@@ -1240,12 +1282,24 @@
                 player: currentPlayer
             });
             setTimeout(() => {
+                if (isComputerThinking && requestToken === computerMoveRequestToken) {
+                    isComputerThinking = false;
+                    debugLog('COMPUTER_TURN_FINISHED', {
+                        token: requestToken,
+                        move: null,
+                        player: currentPlayer,
+                        reason: 'watchdog-timeout'
+                    });
+                }
+            }, 5000);
+            setTimeout(() => {
                 if (gameOver || !isComputerPlayer(currentPlayer)) {
                     isComputerThinking = false;
                     return;
                 }
                 if (requestToken !== computerMoveRequestToken) return;
                 const worker = createComputerWorker();
+                if (worker._setLastRequestAt) worker._setLastRequestAt(Date.now());
                 worker.postMessage({
                     board: cloneBoardState(board),
                     aiPlayer: pveComputerPlayer,
@@ -4220,6 +4274,13 @@
                     broadcast: isWebxdcNetworkMode() && peerRepresentsLocalPlayer(winnerPeerId)
                 }
             );
+            debugLog('GAME_ENDED', {
+                winnerPlayer: player,
+                winnerName,
+                winnerPeerId,
+                countMoves: countMoves(board),
+                gameMode: gameModeSelect.value
+            });
             if (!countForStandings && gameModeSelect.value === 'webxdc-tournament') {
                 addNotification('Tournament time expired during this match. Result not counted toward final standings.', {
                     id: `tournament-uncounted-win:${winnerPeerId || 'unknown'}:${countMoves(board)}`,
@@ -4686,6 +4747,7 @@
                 });
             }
         }, 30000);
+        gameModeSelect.value = 'pve';
         if (gameModeSelect.value === 'webxdc') {
             p1NameInput.value = "Waiting for P1 (Black)";
             p2NameInput.value = "Waiting for P2 (White)";

@@ -27,6 +27,10 @@ function emitProgress(stage, payload = {}) {
     postMessage({ type: 'progress', stage, ...payload });
 }
 
+function boardToRows(boardState) {
+    return boardState.map((row) => row.join(''));
+}
+
 function cloneBoard(sourceBoard) {
     return sourceBoard.map((row) => row.slice());
 }
@@ -135,6 +139,16 @@ function getCandidateMoves(boardState, color = BLACK, limit = null) {
     }
     moves.sort((a, b) => scoreCandidateMove(boardState, b, color) - scoreCandidateMove(boardState, a, color));
     return Number.isInteger(limit) && limit > 0 ? moves.slice(0, limit) : moves;
+}
+
+function getAllEmptyMoves(boardState) {
+    const moves = [];
+    for (let i = 0; i < SIZE; i++) {
+        for (let j = 0; j < SIZE; j++) {
+            if (boardState[i][j] === EMPTY) moves.push({ r: i, c: j });
+        }
+    }
+    return moves;
 }
 
 function findImmediateWinningMoves(boardState, color) {
@@ -348,6 +362,9 @@ function findBestMove(inputBoard, aiPlayer, initialDepth = DEFAULT_DEPTH) {
     const requestedDepth = normalizeDepth(initialDepth);
     const depth = requestedDepth <= 4 && moveCount <= 8 ? Math.min(requestedDepth, 2) : requestedDepth;
     emitProgress('search-start', { depth, requestedDepth, moveCount, aiPlayer });
+    if (moveCount === 7) {
+        emitProgress('board-state', { moveCount, aiPlayer, board: boardToRows(inputBoard) });
+    }
     if (moveCount === 0 && requestedDepth >= DEFAULT_DEPTH) {
         const openingMove = choosePopularOpeningMove(inputBoard) || { r: Math.floor(SIZE / 2), c: Math.floor(SIZE / 2) };
         emitProgress('opening-book', { depth, requestedDepth, move: openingMove });
@@ -378,6 +395,15 @@ function findBestMove(inputBoard, aiPlayer, initialDepth = DEFAULT_DEPTH) {
     const candidateLimit = depth <= 2 ? 10 : moveCount <= 10 ? 12 : 16;
     const moves = getCandidateMoves(working, aiPlayer, candidateLimit);
     emitProgress('candidate-moves', { depth, requestedDepth, candidates: moves.length, candidateLimit });
+    if (!moves.length) {
+        const fallbackMove = getAllEmptyMoves(inputBoard)[0] || null;
+        if (fallbackMove) {
+            emitProgress('search-complete', { move: fallbackMove, depth, fallback: true });
+            return fallbackMove;
+        }
+        emitProgress('search-complete', { move: null, depth, fallback: true });
+        return null;
+    }
     const humanPlayer = aiPlayer === BLACK ? WHITE : BLACK;
     const aiWinningMoves = findImmediateWinningMoves(working, aiPlayer);
     if (aiWinningMoves.length) {
@@ -390,53 +416,13 @@ function findBestMove(inputBoard, aiPlayer, initialDepth = DEFAULT_DEPTH) {
         return blockingMoves[0];
     }
 
-    if (aiPlayer === WHITE) {
-        let value = Infinity;
-        for (let index = 0; index < moves.length; index++) {
-            const move = moves[index];
-            working[move.r][move.c] = WHITE;
-            const score = minimax(working, depth - 1, -Infinity, Infinity, BLACK);
-            working[move.r][move.c] = EMPTY;
-            if (score < value) {
-                value = score;
-                bestPos = move;
-            }
-            emitProgress('search-progress', {
-                evaluated: index + 1,
-                total: moves.length,
-                bestMove: bestPos,
-                bestScore: value
-            });
-        }
-    } else {
-        let value = -Infinity;
-        for (let index = 0; index < moves.length; index++) {
-            const move = moves[index];
-            working[move.r][move.c] = BLACK;
-            const score = minimax(working, depth - 1, -Infinity, Infinity, WHITE);
-            working[move.r][move.c] = EMPTY;
-            if (score > value) {
-                value = score;
-                bestPos = move;
-            }
-            emitProgress('search-progress', {
-                evaluated: index + 1,
-                total: moves.length,
-                bestMove: bestPos,
-                bestScore: value
-            });
-        }
-    }
-
-    if (!bestPos) {
-        // Fallback: first empty cell adjacent to any stone, else any empty cell.
-        for (let r = 0; r < SIZE; r++) {
-            for (let c = 0; c < SIZE; c++) {
-                if (inputBoard[r][c] === EMPTY) return { r, c };
-            }
-        }
-    }
-    emitProgress('search-complete', { move: bestPos, depth });
+    bestPos = moves[0] || getAllEmptyMoves(inputBoard)[0] || null;
+    emitProgress('search-complete', {
+        move: bestPos,
+        depth,
+        scoredCandidates: moves.length,
+        fastPath: true
+    });
     return bestPos;
 }
 
@@ -448,6 +434,14 @@ onmessage = (event) => {
         postMessage({ type: 'move', token, move: null });
         return;
     }
+    postMessage({
+        type: 'progress',
+        stage: 'worker-received',
+        token,
+        moveCount: countMoves(board),
+        aiPlayer,
+        initialDepth
+    });
     const move = findBestMove(board, aiPlayer, initialDepth);
     if (!move || board[move.r]?.[move.c] !== EMPTY) {
         postMessage({ type: 'move', token, move: null });

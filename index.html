@@ -1182,11 +1182,33 @@
             return Number.isInteger(depth) && depth > 0 ? depth : 5;
         }
 
+        function getComputerSearchPolicy() {
+            const depth = getSelectedDifficultyDepth();
+            const hard = depth >= 6;
+            return {
+                depth: hard ? 8 : depth,
+                candidateLimit: hard ? 20 : depth >= 4 ? 14 : 10,
+                defenseDepth: hard ? 4 : 2,
+                useStrongHeuristics: hard,
+                isHard: hard
+            };
+        }
+
         function updateDifficultyControlVisibility() {
             if (!difficultyControl || !difficultySelect) return;
             const isPve = gameModeSelect.value === 'pve';
             difficultyControl.hidden = !isPve;
             difficultySelect.disabled = !isPve;
+        }
+
+        if (difficultySelect) {
+            difficultySelect.addEventListener('change', () => {
+                debugLog('DIFFICULTY_CHANGED', {
+                    depth: getSelectedDifficultyDepth(),
+                    label: difficultySelect.options[difficultySelect.selectedIndex]?.textContent || null,
+                    gameMode: gameModeSelect.value
+                });
+            });
         }
 
         function isComputerPlayer(playerNumber) {
@@ -1201,7 +1223,7 @@
             worker.onmessage = (event) => {
                 const payload = event.data || {};
                 if (payload.type === 'progress') {
-                    debugLog('COMPUTER_THINKING', payload);
+                    debugLog(payload.stage === 'board-state' ? 'COMPUTER_THREAT_SUMMARY' : 'COMPUTER_THINKING', payload);
                     return;
                 }
                 const activeToken = Number.isInteger(payload.token) ? payload.token : null;
@@ -1269,15 +1291,28 @@
             isComputerThinking = true;
             const delayMs = 200;
             const requestToken = ++computerMoveRequestToken;
+            const searchPolicy = getComputerSearchPolicy();
+            const boardPositions = {
+                black: [],
+                white: []
+            };
+            for (let r = 0; r < board.length; r++) {
+                for (let c = 0; c < board[r].length; c++) {
+                    if (board[r][c] === 1) boardPositions.black.push({ r, c });
+                    if (board[r][c] === 2) boardPositions.white.push({ r, c });
+                }
+            }
             debugLog('COMPUTER_BOARD_STATE', {
                 token: requestToken,
                 player: currentPlayer,
                 moveCount: countMoves(board),
-                board: board.map((row) => row.join(''))
+                board: board.map((row) => row.join('')),
+                positions: boardPositions
             });
             debugLog('COMPUTER_TURN_STARTED', {
                 token: requestToken,
-                depth: getSelectedDifficultyDepth(),
+                depth: searchPolicy.depth,
+                policy: searchPolicy,
                 moveCount: countMoves(board),
                 player: currentPlayer
             });
@@ -1304,7 +1339,7 @@
                     board: cloneBoardState(board),
                     aiPlayer: pveComputerPlayer,
                     humanPlayer: pveComputerPlayer === 1 ? 2 : 1,
-                    initialDepth: getSelectedDifficultyDepth(),
+                    ...searchPolicy,
                     token: requestToken
                 });
             }, delayMs);

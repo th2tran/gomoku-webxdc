@@ -110,6 +110,307 @@ function countAdjacentStones(boardState, row, col) {
     return count;
 }
 
+function readLineCells(boardState, row, col, dr, dc, length) {
+    const cells = [];
+    for (let i = 0; i < length; i++) {
+        const r = row + dr * i;
+        const c = col + dc * i;
+        if (r < 0 || r >= SIZE || c < 0 || c >= SIZE) return null;
+        cells.push(boardState[r][c]);
+    }
+    return cells;
+}
+
+function countPatternOccurrences(boardState, player, pattern) {
+    const directions = [
+        [0, 1],
+        [1, 0],
+        [1, 1],
+        [1, -1]
+    ];
+    const length = pattern.length;
+    let count = 0;
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            for (const [dr, dc] of directions) {
+                const cells = readLineCells(boardState, r, c, dr, dc, length);
+                if (!cells) continue;
+                let matches = true;
+                for (let i = 0; i < length; i++) {
+                    const expected = pattern[i];
+                    const actual = cells[i];
+                    if (expected === 'P' && actual !== player) { matches = false; break; }
+                    if (expected === 'E' && actual !== EMPTY) { matches = false; break; }
+                }
+                if (matches) count++;
+            }
+        }
+    }
+    return count;
+}
+
+function countThreatClass(boardState, player, patterns) {
+    let count = 0;
+    for (const pattern of patterns) {
+        count += countPatternOccurrences(boardState, player, pattern);
+    }
+    return count;
+}
+
+function countOpenThreeThreats(boardState, player) {
+    const directions = [
+        [0, 1],
+        [1, 0],
+        [1, 1],
+        [1, -1]
+    ];
+    const patterns = [
+        [EMPTY, player, player, player, EMPTY],
+        [EMPTY, player, player, EMPTY, player, EMPTY],
+        [EMPTY, player, EMPTY, player, player, EMPTY],
+        [EMPTY, EMPTY, player, player, player, EMPTY]
+    ];
+    let count = 0;
+
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            for (const [dr, dc] of directions) {
+                for (const pattern of patterns) {
+                    const cells = readLineCells(boardState, r, c, dr, dc, pattern.length);
+                    if (!cells) continue;
+                    let matches = true;
+                    for (let i = 0; i < pattern.length; i++) {
+                        const expected = pattern[i];
+                        const actual = cells[i];
+                        if (expected === player && actual !== player) { matches = false; break; }
+                        if (expected === EMPTY && actual !== EMPTY) { matches = false; break; }
+                    }
+                    if (matches) count++;
+                }
+            }
+        }
+    }
+
+    return count;
+}
+
+function countBrokenThreeThreats(boardState, player) {
+    return (
+        countThreatClass(boardState, player, [
+            ['E', 'P', 'P', 'E', 'P', 'E'],
+            ['E', 'P', 'E', 'P', 'P', 'E'],
+            ['E', 'P', 'P', 'E', 'E', 'P'],
+            ['P', 'E', 'P', 'P', 'E', 'E'],
+            ['E', 'P', 'P', 'E', 'P', 'P', 'E']
+        ])
+    );
+}
+
+function countOpenFourThreats(boardState, player) {
+    return countThreatClass(boardState, player, [
+        ['E', 'P', 'P', 'P', 'P', 'E']
+    ]);
+}
+
+function countSimpleFourThreats(boardState, player) {
+    return countThreatClass(boardState, player, [
+        ['P', 'P', 'P', 'P', 'E'],
+        ['E', 'P', 'P', 'P', 'P'],
+        ['P', 'P', 'P', 'E', 'P'],
+        ['P', 'P', 'E', 'P', 'P'],
+        ['P', 'E', 'P', 'P', 'P']
+    ]);
+}
+
+function countOpenTwoThreats(boardState, player) {
+    return countThreatClass(boardState, player, [
+        ['E', 'P', 'P', 'E'],
+        ['E', 'P', 'E', 'P', 'E'],
+        ['E', 'E', 'P', 'P', 'E'],
+        ['E', 'P', 'P', 'E', 'E']
+    ]);
+}
+
+function summarizeMoveThreats(boardState, move, player) {
+    const nextBoard = cloneBoard(boardState);
+    nextBoard[move.r][move.c] = player;
+    return {
+        openThree: countOpenThreeThreats(nextBoard, player),
+        brokenThree: countBrokenThreeThreats(nextBoard, player),
+        openFour: countOpenFourThreats(nextBoard, player),
+        simpleFour: countSimpleFourThreats(nextBoard, player),
+        openTwo: countOpenTwoThreats(nextBoard, player),
+        opponentOpenThree: countOpenThreeThreats(nextBoard, player === BLACK ? WHITE : BLACK),
+        opponentOpenFour: countOpenFourThreats(nextBoard, player === BLACK ? WHITE : BLACK)
+    };
+}
+
+function normalizeLine(line) {
+    const trimmed = line.slice();
+    while (trimmed.length && trimmed[0] === EMPTY) trimmed.shift();
+    while (trimmed.length && trimmed[trimmed.length - 1] === EMPTY) trimmed.pop();
+    return trimmed;
+}
+
+function countOpenThreeLines(boardState, player) {
+    const directions = [
+        [0, 1],
+        [1, 0],
+        [1, 1],
+        [1, -1]
+    ];
+    const patterns = [
+        [EMPTY, player, player, player, EMPTY],
+        [EMPTY, player, player, EMPTY, player, EMPTY],
+        [EMPTY, player, EMPTY, player, player, EMPTY],
+        [EMPTY, EMPTY, player, player, player, EMPTY]
+    ];
+    let count = 0;
+
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            for (const [dr, dc] of directions) {
+                for (const pattern of patterns) {
+                    const startRow = r - (pattern.length - 1) * dr;
+                    const startCol = c - (pattern.length - 1) * dc;
+                    const line = readLineCells(boardState, startRow, startCol, dr, dc, pattern.length);
+                    if (!line) continue;
+                    if (pattern.every((cell, index) => line[index] === cell)) {
+                        count++;
+                    }
+                }
+            }
+        }
+    }
+
+    return count;
+}
+
+function countOpenThreePotentialLines(boardState, player) {
+    const directions = [
+        [0, 1],
+        [1, 0],
+        [1, 1],
+        [1, -1]
+    ];
+    const patterns = [
+        [EMPTY, player, player, EMPTY, player, EMPTY],
+        [EMPTY, player, EMPTY, player, player, EMPTY],
+        [EMPTY, player, player, EMPTY, EMPTY, player, EMPTY],
+        [EMPTY, player, EMPTY, EMPTY, player, player, EMPTY],
+        [EMPTY, EMPTY, player, player, EMPTY, player, EMPTY],
+        [EMPTY, EMPTY, player, EMPTY, player, player, EMPTY]
+    ];
+    let count = 0;
+
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            for (const [dr, dc] of directions) {
+                for (const pattern of patterns) {
+                    const startRow = r - (pattern.length - 1) * dr;
+                    const startCol = c - (pattern.length - 1) * dc;
+                    const line = readLineCells(boardState, startRow, startCol, dr, dc, pattern.length);
+                    if (!line) continue;
+                    if (pattern.every((cell, index) => line[index] === cell)) {
+                        count++;
+                    }
+                }
+            }
+        }
+    }
+
+    return count;
+}
+
+function lineMatches(boardState, row, col, dr, dc, pattern) {
+    const line = readLineCells(boardState, row, col, dr, dc, pattern.length);
+    if (!line) return false;
+    return pattern.every((cell, index) => line[index] === cell);
+}
+
+function findOpenThreeBlockingMoves(boardState, player) {
+    const opponent = player === BLACK ? WHITE : BLACK;
+    const blocks = new Map();
+    const directions = [
+        [0, 1],
+        [1, 0],
+        [1, 1],
+        [1, -1]
+    ];
+    const patterns = [
+        [EMPTY, opponent, opponent, opponent, EMPTY],
+        [EMPTY, EMPTY, opponent, opponent, opponent, EMPTY]
+    ];
+
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            for (const [dr, dc] of directions) {
+                for (const pattern of patterns) {
+                    const startRow = r - (pattern.length - 1) * dr;
+                    const startCol = c - (pattern.length - 1) * dc;
+                    const line = readLineCells(boardState, startRow, startCol, dr, dc, pattern.length);
+                    if (!line || !pattern.every((cell, index) => line[index] === cell)) continue;
+                    const endpoints = [
+                        { r: startRow, c: startCol },
+                        { r: startRow + (pattern.length - 1) * dr, c: startCol + (pattern.length - 1) * dc }
+                    ];
+                    for (const endpoint of endpoints) {
+                        if (boardState[endpoint.r]?.[endpoint.c] === EMPTY) {
+                            blocks.set(`${endpoint.r},${endpoint.c}`, endpoint);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return Array.from(blocks.values());
+}
+
+function findPotentialOpenThreeBlockingMoves(boardState, player) {
+    const opponent = player === BLACK ? WHITE : BLACK;
+    const blocks = new Map();
+    const directions = [
+        [0, 1],
+        [1, 0],
+        [1, 1],
+        [1, -1]
+    ];
+    const patterns = [
+        [EMPTY, opponent, opponent, EMPTY, opponent, EMPTY],
+        [EMPTY, opponent, EMPTY, opponent, opponent, EMPTY],
+        [EMPTY, opponent, opponent, EMPTY, EMPTY, opponent, EMPTY],
+        [EMPTY, opponent, EMPTY, EMPTY, opponent, opponent, EMPTY],
+        [EMPTY, EMPTY, opponent, opponent, EMPTY, opponent, EMPTY],
+        [EMPTY, EMPTY, opponent, EMPTY, opponent, opponent, EMPTY]
+    ];
+
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            for (const [dr, dc] of directions) {
+                for (const pattern of patterns) {
+                    const startRow = r - (pattern.length - 1) * dr;
+                    const startCol = c - (pattern.length - 1) * dc;
+                    const line = readLineCells(boardState, startRow, startCol, dr, dc, pattern.length);
+                    if (!line || !pattern.every((cell, index) => line[index] === cell)) continue;
+                    const endpointIndexes = [0, pattern.length - 1];
+                    for (const endpointIndex of endpointIndexes) {
+                        const endpoint = {
+                            r: startRow + endpointIndex * dr,
+                            c: startCol + endpointIndex * dc
+                        };
+                        if (boardState[endpoint.r]?.[endpoint.c] === EMPTY) {
+                            blocks.set(`${endpoint.r},${endpoint.c}`, endpoint);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return Array.from(blocks.values());
+}
+
 function scoreCandidateMove(boardState, move, color) {
     let score = 0;
     const opponent = color === BLACK ? WHITE : BLACK;
@@ -139,6 +440,25 @@ function getCandidateMoves(boardState, color = BLACK, limit = null) {
     }
     moves.sort((a, b) => scoreCandidateMove(boardState, b, color) - scoreCandidateMove(boardState, a, color));
     return Number.isInteger(limit) && limit > 0 ? moves.slice(0, limit) : moves;
+}
+
+function getTacticalCandidateMoves(boardState, color, limit = 24) {
+    const moves = getCandidateMoves(boardState, color, limit);
+    const tacticalMoves = [];
+    for (const move of moves) {
+        const threats = summarizeMoveThreats(boardState, move, color);
+        const tacticalScore =
+            threats.openFour * 6 +
+            threats.simpleFour * 4 +
+            threats.openThree * 3 +
+            threats.brokenThree * 2 +
+            threats.opponentOpenFour * 8 +
+            threats.opponentOpenThree * 5 +
+            threats.openTwo;
+        tacticalMoves.push({ move, tacticalScore });
+    }
+    tacticalMoves.sort((a, b) => b.tacticalScore - a.tacticalScore || distanceToCenter(a.move) - distanceToCenter(b.move));
+    return tacticalMoves.map((entry) => entry.move);
 }
 
 function getAllEmptyMoves(boardState) {
@@ -177,121 +497,88 @@ function hasImmediateWinningMove(boardState, color) {
 
 function evaluate(g) {
     let count = 0;
+    const blackOpenThree = countOpenThreeThreats(g, BLACK);
+    const whiteOpenThree = countOpenThreeThreats(g, WHITE);
+    const blackBrokenThree = countBrokenThreeThreats(g, BLACK);
+    const whiteBrokenThree = countBrokenThreeThreats(g, WHITE);
+    const blackOpenFour = countOpenFourThreats(g, BLACK);
+    const whiteOpenFour = countOpenFourThreats(g, WHITE);
+    const blackSimpleFour = countSimpleFourThreats(g, BLACK);
+    const whiteSimpleFour = countSimpleFourThreats(g, WHITE);
+    const blackOpenTwo = countOpenTwoThreats(g, BLACK);
+    const whiteOpenTwo = countOpenTwoThreats(g, WHITE);
 
-    function hasOpenFour(color) {
-        for (let i = 0; i < SIZE; i++) {
-            for (let j = 0; j < SIZE; j++) {
-                if (j + 5 < SIZE &&
-                    g[i][j] === EMPTY && g[i][j + 1] === color && g[i][j + 2] === color && g[i][j + 3] === color && g[i][j + 4] === color && g[i][j + 5] === EMPTY) return true;
-                if (i + 5 < SIZE &&
-                    g[i][j] === EMPTY && g[i + 1][j] === color && g[i + 2][j] === color && g[i + 3][j] === color && g[i + 4][j] === color && g[i + 5][j] === EMPTY) return true;
-                if (i + 5 < SIZE && j + 5 < SIZE &&
-                    g[i][j] === EMPTY && g[i + 1][j + 1] === color && g[i + 2][j + 2] === color && g[i + 3][j + 3] === color && g[i + 4][j + 4] === color && g[i + 5][j + 5] === EMPTY) return true;
-                if (i - 5 >= 0 && j + 5 < SIZE &&
-                    g[i][j] === EMPTY && g[i - 1][j + 1] === color && g[i - 2][j + 2] === color && g[i - 3][j + 3] === color && g[i - 4][j + 4] === color && g[i - 5][j + 5] === EMPTY) return true;
-            }
-        }
-        return false;
-    }
-
-    function fours(color) {
-        let n = 0;
-        for (let i = 0; i < SIZE; i++) {
-            for (let j = 0; j < SIZE; j++) {
-                if (j + 4 < SIZE) {
-                    if ((g[i][j] === color && g[i][j + 1] === color && g[i][j + 2] === color && g[i][j + 3] === color && g[i][j + 4] === EMPTY) ||
-                        (g[i][j] === EMPTY && g[i][j + 1] === color && g[i][j + 2] === color && g[i][j + 3] === color && g[i][j + 4] === color)) n++;
-                }
-                if (i + 4 < SIZE) {
-                    if ((g[i][j] === color && g[i + 1][j] === color && g[i + 2][j] === color && g[i + 3][j] === color && g[i + 4][j] === EMPTY) ||
-                        (g[i][j] === EMPTY && g[i + 1][j] === color && g[i + 2][j] === color && g[i + 3][j] === color && g[i + 4][j] === color)) n++;
-                }
-                if (i + 4 < SIZE && j + 4 < SIZE) {
-                    if ((g[i][j] === color && g[i + 1][j + 1] === color && g[i + 2][j + 2] === color && g[i + 3][j + 3] === color && g[i + 4][j + 4] === EMPTY) ||
-                        (g[i][j] === EMPTY && g[i + 1][j + 1] === color && g[i + 2][j + 2] === color && g[i + 3][j + 3] === color && g[i + 4][j + 4] === color)) n++;
-                }
-                if (i - 4 >= 0 && j + 4 < SIZE) {
-                    if ((g[i][j] === color && g[i - 1][j + 1] === color && g[i - 2][j + 2] === color && g[i - 3][j + 3] === color && g[i - 4][j + 4] === EMPTY) ||
-                        (g[i][j] === EMPTY && g[i - 1][j + 1] === color && g[i - 2][j + 2] === color && g[i - 3][j + 3] === color && g[i - 4][j + 4] === color)) n++;
-                }
-            }
-        }
-        return n;
-    }
-
-    function countThreeThreats(color) {
-        let exactOpen = 0;
-        let brokenOpen = 0;
-        const directions = [
-            [0, 1],
-            [1, 0],
-            [1, 1],
-            [-1, 1]
-        ];
-
-        function matchesPattern(line, pattern) {
-            return pattern.every((value, index) => line[index] === value);
-        }
-
-        for (let i = 0; i < SIZE; i++) {
-            for (let j = 0; j < SIZE; j++) {
-                for (const [dRow, dCol] of directions) {
-                    const line5 = readLine(g, i, j, dRow, dCol, 5);
-                    if (line5 && matchesPattern(line5, [EMPTY, color, color, color, EMPTY])) {
-                        exactOpen++;
-                    }
-
-                    const line6 = readLine(g, i, j, dRow, dCol, 6);
-                    if (!line6) continue;
-                    if (matchesPattern(line6, [EMPTY, color, color, EMPTY, color, EMPTY])) {
-                        brokenOpen++;
-                    } else if (matchesPattern(line6, [EMPTY, color, EMPTY, color, color, EMPTY])) {
-                        brokenOpen++;
-                    }
-                }
-            }
-        }
-
-        return { exactOpen, brokenOpen };
-    }
-
-    function openTwos(color) {
-        let n = 0;
-        for (let i = 0; i < SIZE; i++) {
-            for (let j = 0; j < SIZE; j++) {
-                if (j + 3 < SIZE && g[i][j] === EMPTY && g[i][j + 1] === color && g[i][j + 2] === color && g[i][j + 3] === EMPTY) n++;
-                if (i + 3 < SIZE && g[i][j] === EMPTY && g[i + 1][j] === color && g[i + 2][j] === color && g[i + 3][j] === EMPTY) n++;
-                if (i + 3 < SIZE && j + 3 < SIZE && g[i][j] === EMPTY && g[i + 1][j + 1] === color && g[i + 2][j + 2] === color && g[i + 3][j + 3] === EMPTY) n++;
-                if (i - 3 >= 0 && j + 3 < SIZE && g[i][j] === EMPTY && g[i - 1][j + 1] === color && g[i - 2][j + 2] === color && g[i - 3][j + 3] === EMPTY) n++;
-            }
-        }
-        return n;
-    }
-
-    const bTwo = openTwos(BLACK);
-    const bThrees = countThreeThreats(BLACK);
-    const bThree = bThrees.exactOpen;
-    const bBrokenThree = bThrees.brokenOpen;
-    const bFour = fours(BLACK);
-    const wTwo = openTwos(WHITE);
-    const wThrees = countThreeThreats(WHITE);
-    const wThree = wThrees.exactOpen;
-    const wBrokenThree = wThrees.brokenOpen;
-    const wFour = fours(WHITE);
     if (hasImmediateWinningMove(g, BLACK)) count += 5000;
     if (hasImmediateWinningMove(g, WHITE)) count -= 7000;
 
-    if (bThree + bBrokenThree + bFour > 1) count += (bThree * 2 + bBrokenThree + bFour * 2) * 1000;
-    else count += (bTwo + bThree * 2 + bBrokenThree + bFour * 2) * 80;
-    if (hasOpenFour(BLACK)) count += 500;
-    if (hasFive(BLACK)) count += 2000;
+    count += blackOpenThree * 50000;
+    count += blackBrokenThree * 12000;
+    count += blackSimpleFour * 180000;
+    count += blackOpenFour * 500000;
+    count += blackOpenTwo * 1500;
 
-    if (wThree + wBrokenThree + wFour > 1) count -= (wThree * 3 + wBrokenThree * 2 + wFour * 2) * 900;
-    else count -= (wTwo + wThree * 3 + wBrokenThree * 2 + wFour * 2) * 120;
-    if (hasOpenFour(WHITE)) count -= 500;
-    if (hasFive(WHITE)) count -= 2000;
+    count -= whiteOpenThree * 70000;
+    count -= whiteBrokenThree * 16000;
+    count -= whiteSimpleFour * 220000;
+    count -= whiteOpenFour * 650000;
+    count -= whiteOpenTwo * 2000;
 
     return count;
+}
+
+function evaluateMoveSafety(boardState, move, aiPlayer, lookaheadDepth = 2) {
+    const nextBoard = cloneBoard(boardState);
+    nextBoard[move.r][move.c] = aiPlayer;
+    const opponent = aiPlayer === BLACK ? WHITE : BLACK;
+    const opponentWins = findImmediateWinningMoves(nextBoard, opponent);
+    if (opponentWins.length) return -1000000;
+    if (lookaheadDepth <= 1) return 0;
+    let risk = 0;
+    const opponentThreats = getThreatSummary(nextBoard);
+    risk -= opponentThreats[opponent === BLACK ? 'blackOpenThree' : 'whiteOpenThree'] * 5000;
+    risk -= opponentThreats[opponent === BLACK ? 'blackOpenFour' : 'whiteOpenFour'] * 8000;
+    return risk;
+}
+
+function getThreatSummary(boardState) {
+    return {
+        blackOpenThree: countOpenThreeThreats(boardState, BLACK),
+        blackBrokenThree: countBrokenThreeThreats(boardState, BLACK),
+        blackOpenFour: countOpenFourThreats(boardState, BLACK),
+        blackSimpleFour: countSimpleFourThreats(boardState, BLACK),
+        blackOpenTwo: countOpenTwoThreats(boardState, BLACK),
+        whiteOpenThree: countOpenThreeThreats(boardState, WHITE),
+        whiteBrokenThree: countBrokenThreeThreats(boardState, WHITE),
+        whiteOpenFour: countOpenFourThreats(boardState, WHITE),
+        whiteSimpleFour: countSimpleFourThreats(boardState, WHITE),
+        whiteOpenTwo: countOpenTwoThreats(boardState, WHITE)
+    };
+}
+
+function hasUrgentThreat(boardState) {
+    const summary = getThreatSummary(boardState);
+    return (
+        summary.blackOpenThree > 0 ||
+        summary.whiteOpenThree > 0 ||
+        summary.blackBrokenThree > 0 ||
+        summary.whiteBrokenThree > 0 ||
+        summary.blackOpenFour > 0 ||
+        summary.whiteOpenFour > 0 ||
+        summary.blackSimpleFour > 0 ||
+        summary.whiteSimpleFour > 0
+    );
+}
+
+function boardWindow(boardState, centerRow, centerCol, radius = 3) {
+    const rows = [];
+    for (let r = centerRow - radius; r <= centerRow + radius; r++) {
+        const cols = [];
+        for (let c = centerCol - radius; c <= centerCol + radius; c++) {
+            cols.push(boardState[r]?.[c] ?? null);
+        }
+        rows.push(cols);
+    }
+    return rows;
 }
 
 function minimax(boardState, depth, alpha, beta, color) {
@@ -357,13 +644,30 @@ function choosePopularOpeningReply(boardState) {
     return available[Math.floor(Math.random() * available.length)];
 }
 
-function findBestMove(inputBoard, aiPlayer, initialDepth = DEFAULT_DEPTH) {
+function findBestMove(inputBoard, aiPlayer, initialDepth = DEFAULT_DEPTH, options = {}) {
+    const isHard = !!options.isHard;
     const moveCount = countMoves(inputBoard);
     const requestedDepth = normalizeDepth(initialDepth);
     const depth = requestedDepth <= 4 && moveCount <= 8 ? Math.min(requestedDepth, 2) : requestedDepth;
     emitProgress('search-start', { depth, requestedDepth, moveCount, aiPlayer });
     if (moveCount === 7) {
-        emitProgress('board-state', { moveCount, aiPlayer, board: boardToRows(inputBoard) });
+        const positions = { black: [], white: [] };
+        for (let r = 0; r < SIZE; r++) {
+            for (let c = 0; c < SIZE; c++) {
+                if (inputBoard[r][c] === BLACK) positions.black.push({ r, c });
+                if (inputBoard[r][c] === WHITE) positions.white.push({ r, c });
+            }
+        }
+        emitProgress('board-state', {
+            moveCount,
+            aiPlayer,
+            board: boardToRows(inputBoard),
+            positions,
+            threats: getThreatSummary(inputBoard),
+            windows: {
+                center: boardWindow(inputBoard, Math.floor(SIZE / 2), Math.floor(SIZE / 2), 3)
+            }
+        });
     }
     if (moveCount === 0 && requestedDepth >= DEFAULT_DEPTH) {
         const openingMove = choosePopularOpeningMove(inputBoard) || { r: Math.floor(SIZE / 2), c: Math.floor(SIZE / 2) };
@@ -375,26 +679,63 @@ function findBestMove(inputBoard, aiPlayer, initialDepth = DEFAULT_DEPTH) {
         emitProgress('opening-center', { depth, requestedDepth, move: { r: center, c: center } });
         return { r: center, c: center };
     }
-    if (moveCount === 1 && requestedDepth >= 4) {
-        const replyMove = choosePopularOpeningReply(inputBoard);
-        if (replyMove) {
-            emitProgress('opening-reply', { depth, requestedDepth, move: replyMove });
-            return replyMove;
-        }
-    }
     if (moveCount <= 5 && requestedDepth >= 4) {
-        const earlyReply = choosePopularOpeningReply(inputBoard);
-        if (earlyReply) {
-            emitProgress('opening-early-game', { depth, requestedDepth, moveCount, move: earlyReply });
-            return earlyReply;
+        const urgentThreat = hasUrgentThreat(inputBoard);
+        emitProgress('opening-early-game', {
+            depth,
+            requestedDepth,
+            moveCount,
+            urgentThreat,
+            threats: getThreatSummary(inputBoard),
+            windows: {
+                center: boardWindow(inputBoard, Math.floor(SIZE / 2), Math.floor(SIZE / 2), 3)
+            }
+        });
+        if (urgentThreat || isHard) {
+            const humanPlayer = aiPlayer === BLACK ? WHITE : BLACK;
+            const blockingMoves = findImmediateWinningMoves(inputBoard, humanPlayer);
+            if (blockingMoves.length) {
+                emitProgress('forced-block', { options: blockingMoves.length, move: blockingMoves[0] });
+                return blockingMoves[0];
+            }
+            const openThreeBlocks = findOpenThreeBlockingMoves(inputBoard, aiPlayer);
+            if (openThreeBlocks.length) {
+                emitProgress('forced-open-three-block', { options: openThreeBlocks.length, move: openThreeBlocks[0] });
+                return openThreeBlocks[0];
+            }
+            const potentialBlocks = isHard ? findPotentialOpenThreeBlockingMoves(inputBoard, aiPlayer) : [];
+            if (potentialBlocks.length) {
+                emitProgress('forced-potential-open-three-block', { options: potentialBlocks.length, move: potentialBlocks[0] });
+                return potentialBlocks[0];
+            }
+            if (isHard) {
+                const tacticalMoves = getTacticalCandidateMoves(inputBoard, aiPlayer, 24);
+                if (tacticalMoves.length) {
+                    emitProgress('hard-tactical-early-game', { depth, requestedDepth, moveCount, move: tacticalMoves[0] });
+                    return tacticalMoves[0];
+                }
+            }
         }
     }
 
     const working = cloneBoard(inputBoard);
     let bestPos = null;
-    const candidateLimit = depth <= 2 ? 10 : moveCount <= 10 ? 12 : 16;
-    const moves = getCandidateMoves(working, aiPlayer, candidateLimit);
+    const tacticalMoves = moveCount >= 4 ? getTacticalCandidateMoves(working, aiPlayer, depth >= 8 ? 24 : 16) : null;
+    const candidateLimit = depth >= 8 ? 24 : depth <= 2 ? 10 : moveCount <= 10 ? 12 : 16;
+    const moves = tacticalMoves && tacticalMoves.length ? tacticalMoves.slice(0, candidateLimit) : getCandidateMoves(working, aiPlayer, candidateLimit);
     emitProgress('candidate-moves', { depth, requestedDepth, candidates: moves.length, candidateLimit });
+    emitProgress('threat-summary', { depth, requestedDepth, summary: getThreatSummary(inputBoard) });
+    if (moveCount >= 5) {
+        const moveThreatSnapshots = moves.map((move) => ({
+            move,
+            threats: summarizeMoveThreats(working, move, aiPlayer)
+        }));
+        emitProgress('move-threat-snapshots', {
+            depth,
+            requestedDepth,
+            snapshots: moveThreatSnapshots
+        });
+    }
     if (!moves.length) {
         const fallbackMove = getAllEmptyMoves(inputBoard)[0] || null;
         if (fallbackMove) {
@@ -415,12 +756,68 @@ function findBestMove(inputBoard, aiPlayer, initialDepth = DEFAULT_DEPTH) {
         emitProgress('forced-block', { options: blockingMoves.length, move: blockingMoves[0] });
         return blockingMoves[0];
     }
+    const openThreeBlocks = findOpenThreeBlockingMoves(working, aiPlayer);
+    if (openThreeBlocks.length) {
+        const verifiedBlocks = openThreeBlocks.filter((move) => {
+            const nextBoard = cloneBoard(working);
+            nextBoard[move.r][move.c] = aiPlayer;
+            return countOpenThreeLines(nextBoard, aiPlayer === BLACK ? WHITE : BLACK) === 0;
+        });
+        const chosenOpenThreeBlock = verifiedBlocks[0] || openThreeBlocks[0];
+        if (chosenOpenThreeBlock) {
+            emitProgress('forced-open-three-block', { options: openThreeBlocks.length, move: chosenOpenThreeBlock });
+            return chosenOpenThreeBlock;
+        }
+    }
+    if (isHard) {
+        const potentialBlocks = findPotentialOpenThreeBlockingMoves(working, aiPlayer);
+        if (potentialBlocks.length) {
+            const verifiedPotentialBlocks = potentialBlocks.filter((move) => {
+                const nextBoard = cloneBoard(working);
+                nextBoard[move.r][move.c] = aiPlayer;
+                return countOpenThreePotentialLines(nextBoard, aiPlayer === BLACK ? WHITE : BLACK) === 0;
+            });
+            const chosenPotentialBlock = verifiedPotentialBlocks[0] || potentialBlocks[0];
+            if (chosenPotentialBlock) {
+                emitProgress('forced-potential-open-three-block', { options: potentialBlocks.length, move: chosenPotentialBlock });
+                return chosenPotentialBlock;
+            }
+        }
+    }
 
-    bestPos = moves[0] || getAllEmptyMoves(inputBoard)[0] || null;
+    let bestScore = -Infinity;
+    for (const move of moves) {
+        const moveThreats = summarizeMoveThreats(working, move, aiPlayer);
+        const safety = evaluateMoveSafety(working, move, aiPlayer, depth >= 8 ? 3 : 2);
+        const score =
+            moveThreats.openFour * 500000 +
+            moveThreats.simpleFour * 180000 +
+            moveThreats.openThree * 50000 +
+            moveThreats.brokenThree * 12000 +
+            moveThreats.openTwo * 1500 +
+            moveThreats.opponentOpenThree * -65000 +
+            moveThreats.opponentOpenFour * -500000 +
+            safety +
+            countAdjacentStones(working, move.r, move.c) * 20 -
+            distanceToCenter(move);
+        emitProgress('candidate-throttle', {
+            depth,
+            requestedDepth,
+            move,
+            threats: moveThreats,
+            score
+        });
+        if (score > bestScore) {
+            bestScore = score;
+            bestPos = move;
+        }
+    }
+    if (!bestPos) bestPos = getAllEmptyMoves(inputBoard)[0] || null;
     emitProgress('search-complete', {
         move: bestPos,
         depth,
         scoredCandidates: moves.length,
+        bestScore,
         fastPath: true
     });
     return bestPos;
@@ -428,7 +825,7 @@ function findBestMove(inputBoard, aiPlayer, initialDepth = DEFAULT_DEPTH) {
 
 onmessage = (event) => {
     const payload = event.data || {};
-    const { board, aiPlayer, token, initialDepth } = payload;
+    const { board, aiPlayer, token, initialDepth, isHard = false } = payload;
     lastProgressReportAt = 0;
     if (!Array.isArray(board)) {
         postMessage({ type: 'move', token, move: null });
@@ -442,7 +839,7 @@ onmessage = (event) => {
         aiPlayer,
         initialDepth
     });
-    const move = findBestMove(board, aiPlayer, initialDepth);
+    const move = findBestMove(board, aiPlayer, initialDepth, { isHard });
     if (!move || board[move.r]?.[move.c] !== EMPTY) {
         postMessage({ type: 'move', token, move: null });
         return;

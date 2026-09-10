@@ -200,6 +200,8 @@
         }
 
         .controls { margin-top: 20px; display: flex; gap: 15px; flex-wrap: wrap; justify-content: center; align-items: center; }
+        .control-group { display: flex; align-items: center; gap: 8px; }
+        .control-group label { font-weight: 700; color: #ecf0f1; }
         select, button { padding: 10px 15px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; }
         select { background-color: #ecf0f1; color: #2c3e50; font-weight: bold; }
         button { background-color: #27ae60; color: white; transition: background 0.3s; }
@@ -401,8 +403,15 @@
             }
 
             .controls select,
-            .controls button {
+            .controls button,
+            .control-group {
                 width: 100%;
+            }
+
+            .control-group {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 6px;
             }
 
             .notifications-popup {
@@ -462,6 +471,14 @@
             <option value="pvp">Local Pass & Play</option>
             <option value="pve">Local vs Computer</option>
         </select>
+        <div class="control-group" id="difficulty-control" hidden>
+            <label for="difficulty-select">Difficulty</label>
+            <select id="difficulty-select">
+                <option value="2">Easy</option>
+                <option value="4" selected>Medium</option>
+                <option value="6">Hard</option>
+            </select>
+        </div>
     <button id="reset-btn">Reset Board / Sync</button>
     </div>
 
@@ -525,6 +542,8 @@
         const p1NameInput = document.getElementById('p1-name');
         const p2NameInput = document.getElementById('p2-name');
         const gameModeSelect = document.getElementById('game-mode');
+        const difficultyControl = document.getElementById('difficulty-control');
+        const difficultySelect = document.getElementById('difficulty-select');
         const titleEl = document.getElementById('title');
         const resetBtn = document.getElementById('reset-btn');
         const debugPopup = document.getElementById('debug-popup');
@@ -1164,6 +1183,18 @@
             debugLog('PVE_SEATS_ASSIGNED', { seatSeed: effectiveSeed, pveComputerPlayer });
         }
 
+        function getSelectedDifficultyDepth() {
+            const depth = Number.parseInt(difficultySelect?.value ?? '', 10);
+            return Number.isInteger(depth) && depth > 0 ? depth : 5;
+        }
+
+        function updateDifficultyControlVisibility() {
+            if (!difficultyControl || !difficultySelect) return;
+            const isPve = gameModeSelect.value === 'pve';
+            difficultyControl.hidden = !isPve;
+            difficultySelect.disabled = !isPve;
+        }
+
         function isComputerPlayer(playerNumber) {
             return gameModeSelect.value === 'pve' && playerNumber === pveComputerPlayer;
         }
@@ -1174,6 +1205,10 @@
             const worker = new Worker('worker.js');
             worker.onmessage = (event) => {
                 const payload = event.data || {};
+                if (payload.type === 'progress') {
+                    debugLog('COMPUTER_THINKING', payload);
+                    return;
+                }
                 const activeToken = Number.isInteger(payload.token) ? payload.token : null;
                 if (activeToken === null || activeToken !== computerMoveRequestToken) {
                     return;
@@ -1198,6 +1233,12 @@
             isComputerThinking = true;
             const delayMs = 200;
             const requestToken = ++computerMoveRequestToken;
+            debugLog('COMPUTER_TURN_STARTED', {
+                token: requestToken,
+                depth: getSelectedDifficultyDepth(),
+                moveCount: countMoves(board),
+                player: currentPlayer
+            });
             setTimeout(() => {
                 if (gameOver || !isComputerPlayer(currentPlayer)) {
                     isComputerThinking = false;
@@ -1209,6 +1250,7 @@
                     board: cloneBoardState(board),
                     aiPlayer: pveComputerPlayer,
                     humanPlayer: pveComputerPlayer === 1 ? 2 : 1,
+                    initialDepth: getSelectedDifficultyDepth(),
                     token: requestToken
                 });
             }, delayMs);
@@ -3459,6 +3501,7 @@
                 p2NameInput.value = "Player 2 (White)";
                 p1NameInput.disabled = false; p2NameInput.disabled = false;
             }
+            updateDifficultyControlVisibility();
             updateModeSelectState();
             updateConnectionIndicator();
             if (e.target.value !== 'webxdc-tournament') {
@@ -3598,6 +3641,15 @@
             const c = parseInt(cell.dataset.col);
 
             if (isNaN(r) || isNaN(c) || board[r][c] !== 0) return; 
+
+            if (gameModeSelect.value === 'pve' && isComputerPlayer(currentPlayer)) {
+                debugLog('MOVE_BLOCKED', {
+                    reason: 'computer-turn',
+                    currentPlayer,
+                    attemptedMove: { r, c }
+                });
+                return;
+            }
 
             if (gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament') {
                 // If another device with my same addr has already claimed a tournament slot, I'm a spectator.
@@ -4657,6 +4709,7 @@
             updateTournamentMatchDisplay();
             announcePresence('PRESENCE');
         }
+        updateDifficultyControlVisibility();
         initBoard(false);
     </script>
 </body>

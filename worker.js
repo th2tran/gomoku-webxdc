@@ -644,6 +644,162 @@ function choosePopularOpeningReply(boardState) {
     return available[Math.floor(Math.random() * available.length)];
 }
 
+/**
+ * Scans the board for all valid VCF Gain Squares (moves that create a four or five for the attacker).
+ * Empty cells are represented as 0 (EMPTY) on this board, matching the function's null|0 check.
+ */
+function findVCFGainSquares(board, attacker) {
+    const size = board.length;
+    const gainSquares = [];
+    const directions = [[0, 1], [1, 0], [1, 1], [1, -1]];
+    const isValid = (r, c) => r >= 0 && r < size && c >= 0 && c < size;
+
+    const createsFour = (r, c) => {
+        for (let [dr, dc] of directions) {
+            for (let offset = 0; offset < 5; offset++) {
+                let attackerCount = 0;
+                let emptyCount = 0;
+                let outOfBounds = false;
+                for (let i = 0; i < 5; i++) {
+                    let checkR = r + dr * (i - offset);
+                    let checkC = c + dc * (i - offset);
+                    if (!isValid(checkR, checkC)) { outOfBounds = true; break; }
+                    let cellValue = (checkR === r && checkC === c) ? attacker : board[checkR][checkC];
+                    if (cellValue === attacker) attackerCount++;
+                    else if (cellValue === null || cellValue === 0) emptyCount++;
+                }
+                if (!outOfBounds && ((attackerCount === 4 && emptyCount === 1) || attackerCount === 5)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    for (let r = 0; r < size; r++) {
+        for (let c = 0; c < size; c++) {
+            if (board[r][c] === null || board[r][c] === 0) {
+                if (createsFour(r, c)) gainSquares.push({ row: r, col: c });
+            }
+        }
+    }
+    return gainSquares;
+}
+
+/**
+ * Finds the Defender's forced Cost Squares after the Attacker places a stone on a Gain Square.
+ * Returns 1 entry for a simple four (forced block), 2+ entries for an open four / double four
+ * (dual threat — treated as a confirmed win in strict VCF).
+ */
+function findVCFCostSquares(board, attacker, gainRow, gainCol) {
+    const size = board.length;
+    const costSquares = [];
+    board[gainRow][gainCol] = attacker;
+
+    const directions = [[0, 1], [1, 0], [1, 1], [1, -1]];
+    const isValid = (r, c) => r >= 0 && r < size && c >= 0 && c < size;
+
+    for (let [dr, dc] of directions) {
+        for (let offset = 0; offset < 5; offset++) {
+            let attackerCount = 0;
+            let emptySquare = null;
+            let outOfBounds = false;
+            for (let i = 0; i < 5; i++) {
+                let checkR = gainRow + dr * (i - offset);
+                let checkC = gainCol + dc * (i - offset);
+                if (!isValid(checkR, checkC)) { outOfBounds = true; break; }
+                let cellValue = board[checkR][checkC];
+                if (cellValue === attacker) attackerCount++;
+                else if (cellValue === null || cellValue === 0) emptySquare = { row: checkR, col: checkC };
+            }
+            if (!outOfBounds && attackerCount === 4 && emptySquare !== null) {
+                const exists = costSquares.some(sq => sq.row === emptySquare.row && sq.col === emptySquare.col);
+                if (!exists) costSquares.push(emptySquare);
+            }
+        }
+    }
+
+    board[gainRow][gainCol] = null;
+    return costSquares;
+}
+
+const TSS_MAX_DEPTH = 6;      // Max attacker plies in a VCF sequence.
+const TSS_MAX_NODES = 4000;   // Safety cap on nodes visited per search.
+
+/**
+ * Threat Space Search for a Victory-by-Continuous-Fours sequence.
+ * Returns the winning move sequence as [{r,c}, ...] starting with the attacker's first move,
+ * or null if no forced VCF win exists within the search bounds.
+ *
+ * Cost-square semantics dictate the tree logic:
+ *   0 cost squares → the gain move already made five (win) or was invalid.
+ *   1 cost square  → simple four; defender is forced onto that single square, recurse.
+ *   2+ cost squares → open four / double four; confirmed win, terminate.
+ */
+function threatSpaceSearch(board, attacker, maxDepth = TSS_MAX_DEPTH) {
+    const defender = attacker === BLACK ? WHITE : BLACK;
+    const counter = { nodes: 0 };
+
+    function search(depth) {
+        if (counter.nodes++ > TSS_MAX_NODES) return null;
+        if (depth <= 0) return null;
+
+        const gainSquares = findVCFGainSquares(board, attacker);
+        for (const gain of gainSquares) {
+            const gr = gain.row, gc = gain.col;
+            if (board[gr][gc] !== EMPTY) continue;
+
+            board[gr][gc] = attacker;
+
+            if (hasFive(board, attacker)) {
+                board[gr][gc] = EMPTY;
+                return [{ r: gr, c: gc }];
+            }
+
+            const costs = findVCFCostSquares(board, attacker, gr, gc);
+
+            // findVCFCostSquares temporarily writes to (gr,gc) then clears it — restore our stone.
+            board[gr][gc] = attacker;
+
+            if (costs.length >= 2) {
+                // Open four / double four: defender can only play one stone — confirmed VCF win.
+                board[gr][gc] = EMPTY;
+                return [{ r: gr, c: gc }];
+            }
+
+            if (costs.length === 0) {
+                board[gr][gc] = EMPTY;
+                continue;
+            }
+
+            // Simple four — defender is forced onto the single cost square.
+            const cost = costs[0];
+            if (board[cost.row][cost.col] !== EMPTY) {
+                board[gr][gc] = EMPTY;
+                continue;
+            }
+            board[cost.row][cost.col] = defender;
+
+            // If the forced block itself makes five for the defender, this branch fails.
+            if (hasFive(board, defender)) {
+                board[cost.row][cost.col] = EMPTY;
+                board[gr][gc] = EMPTY;
+                continue;
+            }
+
+            const sub = search(depth - 1);
+
+            board[cost.row][cost.col] = EMPTY;
+            board[gr][gc] = EMPTY;
+
+            if (sub) return [{ r: gr, c: gc }, ...sub];
+        }
+        return null;
+    }
+
+    return search(maxDepth);
+}
+
 function findBestMove(inputBoard, aiPlayer, initialDepth = DEFAULT_DEPTH, options = {}) {
     const isHard = !!options.isHard;
     const moveCount = countMoves(inputBoard);
@@ -755,6 +911,53 @@ function findBestMove(inputBoard, aiPlayer, initialDepth = DEFAULT_DEPTH, option
     if (blockingMoves.length) {
         emitProgress('forced-block', { options: blockingMoves.length, move: blockingMoves[0] });
         return blockingMoves[0];
+    }
+    if (isHard) {
+        // Threat Space Search: try to find a Victory-by-Continuous-Fours for the AI.
+        const aiVCF = threatSpaceSearch(working, aiPlayer, TSS_MAX_DEPTH);
+        if (aiVCF && aiVCF.length) {
+            emitProgress('tss-vcf-attack', {
+                depth,
+                requestedDepth,
+                sequenceLength: aiVCF.length,
+                sequence: aiVCF,
+                move: aiVCF[0]
+            });
+            return aiVCF[0];
+        }
+        // Then check if the opponent has a forced VCF that we must break preemptively.
+        const oppVCF = threatSpaceSearch(working, humanPlayer, TSS_MAX_DEPTH);
+        if (oppVCF && oppVCF.length) {
+            const oppGain = oppVCF[0];
+            const oppCosts = findVCFCostSquares(working, humanPlayer, oppGain.r, oppGain.c);
+            const candidates = [];
+            const pushUnique = (r, c) => {
+                if (r < 0 || r >= SIZE || c < 0 || c >= SIZE) return;
+                if (working[r][c] !== EMPTY) return;
+                if (!candidates.some((m) => m.r === r && m.c === c)) candidates.push({ r, c });
+            };
+            // Best preemptive defenses: occupy the attacker's gain square, or the empty
+            // square in the would-be four (the defender's forced block).
+            pushUnique(oppGain.r, oppGain.c);
+            for (const cs of oppCosts) pushUnique(cs.row, cs.col);
+
+            let defense = null;
+            for (const cand of candidates) {
+                working[cand.r][cand.c] = aiPlayer;
+                const stillHasVCF = threatSpaceSearch(working, humanPlayer, TSS_MAX_DEPTH);
+                working[cand.r][cand.c] = EMPTY;
+                if (!stillHasVCF) { defense = cand; break; }
+            }
+            if (!defense) defense = candidates[0] || { r: oppGain.r, c: oppGain.c };
+            emitProgress('tss-vcf-defense', {
+                depth,
+                requestedDepth,
+                sequenceLength: oppVCF.length,
+                sequence: oppVCF,
+                move: defense
+            });
+            return defense;
+        }
     }
     const openThreeBlocks = findOpenThreeBlockingMoves(working, aiPlayer);
     if (openThreeBlocks.length) {

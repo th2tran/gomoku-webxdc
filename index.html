@@ -112,6 +112,154 @@
         .current-match-panel .dashboard {
             margin-bottom: 0;
         }
+        .game-history-panel {
+            width: 100%;
+            max-width: 600px;
+            margin: 18px 0 14px 0;
+            padding: 10px 12px;
+            background: #34495e;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            font-size: 14px;
+        }
+        .game-history-panel h3 {
+            margin: 0 0 8px 0;
+            font-size: 15px;
+            color: #f1c40f;
+        }
+        .game-history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .game-history-clear-btn {
+            padding: 4px 8px;
+            font-size: 11px;
+            border: none;
+            border-radius: 4px;
+            background: #52677d;
+            color: white;
+            cursor: pointer;
+        }
+        .game-history-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .game-history-empty {
+            color: #c8d6e5;
+            font-style: italic;
+        }
+        .game-history-item {
+            width: 100%;
+            text-align: left;
+            background: #52677d;
+            color: white;
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .game-history-item:hover {
+            background: #5f7892;
+        }
+        .replay-banner {
+            width: 100%;
+            max-width: 600px;
+            margin: 0 0 14px 0;
+            padding: 10px 12px;
+            background: #1f2d3a;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            color: #f1c40f;
+            font-weight: 700;
+            text-align: center;
+        }
+        .replay-controls {
+            width: 100%;
+            max-width: 600px;
+            margin: 0 0 14px 0;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .replay-controls button {
+            background: #52677d;
+        }
+
+        .board-area {
+            display: flex;
+            flex-direction: row;
+            align-items: flex-start;
+            justify-content: center;
+            gap: 16px;
+            width: 100%;
+            max-width: 900px;
+        }
+
+        .move-list-panel {
+            width: 200px;
+            max-height: min(620px, 80vh);
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 10px;
+            padding: 10px;
+            box-sizing: border-box;
+            flex-shrink: 0;
+        }
+
+        .move-list-panel h3 {
+            margin: 0 0 8px 0;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .move-list-empty {
+            font-size: 12px;
+            opacity: 0.7;
+            text-align: center;
+        }
+
+        .move-list {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .move-list-item {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: monospace;
+            cursor: pointer;
+            background: transparent;
+            border: none;
+            color: white;
+            text-align: left;
+        }
+
+        .move-list-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .move-list-item.active {
+            background: #52677d;
+            font-weight: bold;
+        }
+
+        @media (max-width: 700px) {
+            .board-area {
+                flex-direction: column;
+                align-items: center;
+            }
+            .move-list-panel {
+                width: min(100%, 620px);
+                max-height: 240px;
+            }
+        }
 
         #board {
             display: grid;
@@ -175,6 +323,17 @@
             pointer-events: auto;
         }
 
+        .board-axis-label {
+            position: absolute;
+            z-index: 2;
+            font-size: 11px;
+            font-weight: 700;
+            color: rgba(42, 24, 12, 0.9);
+            text-shadow: 0 1px 0 rgba(255,255,255,0.25);
+            pointer-events: none;
+            user-select: none;
+        }
+
         .piece {
             width: 76%;
             height: 76%;
@@ -199,7 +358,15 @@
             border: 1px solid rgba(0,0,0,0.18);
         }
 
-        .controls { margin-top: 20px; display: flex; gap: 15px; flex-wrap: wrap; justify-content: center; align-items: center; }
+        .controls {
+            margin-top: 20px;
+            margin-bottom: 18px;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+        }
         .control-group { display: flex; align-items: center; gap: 8px; }
         .control-group label { font-weight: 700; color: #ecf0f1; }
         select, button { padding: 10px 15px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; }
@@ -447,23 +614,6 @@
         <div class="score-row"><span class="score-name">No players yet</span><span class="score-value">0</span></div>
     </div>
 
-    <div class="current-match-panel">
-        <div class="current-match-meta" id="current-match-meta">Current Match</div>
-        <div class="dashboard">
-            <div class="player-info">
-                <input type="text" id="p1-name" value="Waiting for P1 (Black)">
-            </div>
-            <div class="player-info">
-                <input type="text" id="p2-name" value="Waiting for P2 (White)">
-            </div>
-        </div>
-    </div>
-
-    <div class="turn-indicator" id="turn-indicator">Current Turn: Waiting for P1 (Black)</div>
-    <div class="move-timer" id="move-timer">Move Timer: --</div>
-
-    <div id="board"></div>
-
     <div class="controls">
         <select id="game-mode">
             <option value="webxdc">Network (2 players)</option>
@@ -479,7 +629,47 @@
                 <option value="6">Hard</option>
             </select>
         </div>
-    <button id="reset-btn">Reset Board / Sync</button>
+        <button id="reset-btn">Reset Board / Sync</button>
+    </div>
+
+    <div class="current-match-panel">
+        <div class="current-match-meta" id="current-match-meta">Current Match</div>
+        <div class="dashboard">
+            <div class="player-info">
+                <input type="text" id="p1-name" value="Waiting for P1 (Black)">
+            </div>
+            <div class="player-info">
+                <input type="text" id="p2-name" value="Waiting for P2 (White)">
+            </div>
+        </div>
+    </div>
+
+    <div class="turn-indicator" id="turn-indicator">Current Turn: Waiting for P1 (Black)</div>
+    <div class="move-timer" id="move-timer">Move Timer: --</div>
+
+    <div class="board-area">
+        <div id="board"></div>
+        <div class="move-list-panel" id="move-list-panel">
+            <h3>Move List</h3>
+            <div class="move-list-empty" id="move-list-empty">No moves yet.</div>
+            <div class="move-list" id="move-list"></div>
+        </div>
+    </div>
+
+    <div class="replay-banner" id="replay-banner" hidden></div>
+    <div class="replay-controls" id="replay-controls" hidden>
+        <button id="replay-prev-btn" type="button">Prev</button>
+        <button id="replay-playpause-btn" type="button">Play</button>
+        <button id="replay-next-btn" type="button">Next</button>
+        <button id="replay-exit-btn" type="button">Exit Replay</button>
+    </div>
+
+    <div class="game-history-panel" id="game-history-panel">
+        <div class="game-history-header">
+            <h3>Game History</h3>
+            <button type="button" class="game-history-clear-btn" id="game-history-clear-btn">Clear History</button>
+        </div>
+        <div class="game-history-list" id="game-history-list"></div>
     </div>
 
     <canvas id="fireworksCanvas"></canvas>
@@ -536,7 +726,20 @@
 
         const boardElement = document.getElementById('board');
         const allPlayersScoreboard = document.getElementById('all-players-scoreboard');
+        const gameHistoryPanel = document.getElementById('game-history-panel');
+        const gameHistoryList = document.getElementById('game-history-list');
+        const gameHistoryClearBtn = document.getElementById('game-history-clear-btn');
+        const replayBanner = document.getElementById('replay-banner');
+        const replayControls = document.getElementById('replay-controls');
+        const replayPrevBtn = document.getElementById('replay-prev-btn');
+        const replayPlayPauseBtn = document.getElementById('replay-playpause-btn');
+        const replayNextBtn = document.getElementById('replay-next-btn');
+        const replayExitBtn = document.getElementById('replay-exit-btn');
+        const moveListPanel = document.getElementById('move-list-panel');
+        const moveListEl = document.getElementById('move-list');
+        const moveListEmptyEl = document.getElementById('move-list-empty');
         const currentMatchMetaEl = document.getElementById('current-match-meta');
+        window.addEventListener('resize', positionBoardCells);
         const turnIndicator = document.getElementById('turn-indicator');
         const moveTimerEl = document.getElementById('move-timer');
         const p1NameInput = document.getElementById('p1-name');
@@ -601,6 +804,11 @@
         let tournamentResetPendingTimer = null;
         const debugTitleTapTimes = [];
         const moveTimeLimitMs = 5 * 60 * 1000;
+        const localGameHistoryStorageKey = 'gomoku-game-history-v1';
+        let gameHistory = [];
+        let historyReplayState = null;
+        let historyReplayTimer = null;
+        let currentGameMoveLog = [];
         let turnDeadlineTs = null;
         let playerDeadlineTs = { 1: null, 2: null };
         let playerRemainingMs = { 1: moveTimeLimitMs, 2: moveTimeLimitMs };
@@ -797,6 +1005,310 @@
                 .map((entry) => `[${formatNotificationTimestamp(entry.at)}] ${entry.text}`)
                 .join('\n');
             notificationsLogEl.scrollTop = notificationsLogEl.scrollHeight;
+        }
+
+        function loadGameHistory() {
+            try {
+                const raw = localStorage.getItem(localGameHistoryStorageKey);
+                const parsed = raw ? JSON.parse(raw) : [];
+                gameHistory = Array.isArray(parsed) ? parsed.filter((entry) => entry && typeof entry === 'object') : [];
+            } catch (_) {
+                gameHistory = [];
+            }
+        }
+
+        function saveGameHistory() {
+            localStorage.setItem(localGameHistoryStorageKey, JSON.stringify(gameHistory.slice(-100)));
+        }
+
+        function getMoveHistoryFromBoardState(stateBoard) {
+            const moves = [];
+            if (!Array.isArray(stateBoard)) return moves;
+            for (let r = 0; r < stateBoard.length; r++) {
+                for (let c = 0; c < stateBoard[r].length; c++) {
+                    const player = stateBoard[r][c];
+                    if (player === 1 || player === 2) moves.push({ r, c, player });
+                }
+            }
+            return moves;
+        }
+
+        function cloneMoveLog(moveLog) {
+            return Array.isArray(moveLog) ? moveLog.map((move) => ({ ...move })) : [];
+        }
+
+        function getReplayMoves(entry) {
+            const boardSnapshot = Array.isArray(entry?.board) ? entry.board : null;
+            if (Array.isArray(entry?.moves) && entry.moves.length) return cloneMoveLog(entry.moves);
+            return getMoveHistoryFromBoardState(boardSnapshot).map((move, index) => ({ ...move, moveNumber: index + 1, source: 'snapshot' }));
+        }
+
+        function getHistoryMoveLog() {
+            return cloneMoveLog(currentGameMoveLog);
+        }
+
+        function deriveGameResult() {
+            const winnerPlayer = gameOver ? currentPlayer : null;
+            const winnerName = winnerPlayer ? getPlayerDisplayName(winnerPlayer) : 'Unknown';
+            return {
+                winnerPlayer,
+                winnerName,
+                finishedAt: Date.now()
+            };
+        }
+
+        function buildGameHistoryEntry(extra = {}) {
+            const moveLog = cloneMoveLog(extra.moves || []);
+            const moveHistory = moveLog.length ? moveLog : getMoveHistoryFromBoardState(extra.board || board).map((move, index) => ({
+                moveNumber: index + 1,
+                r: move.r,
+                c: move.c,
+                player: move.player,
+                at: null,
+                source: null,
+                peerId: null,
+                name: null,
+                addr: null
+            }));
+            return {
+                id: `game:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+                mode: gameModeSelect.value,
+                startedAt: extra.startedAt || Date.now(),
+                finishedAt: extra.finishedAt || Date.now(),
+                players: {
+                    1: p1NameInput.value,
+                    2: p2NameInput.value
+                },
+                result: extra.result || deriveGameResult(),
+                moves: moveHistory.map((move) => ({
+                    moveNumber: move.moveNumber || null,
+                    r: move.r,
+                    c: move.c,
+                    player: move.player,
+                    at: move.at || null,
+                    source: move.source || null,
+                    peerId: move.peerId || null,
+                    name: move.name || null,
+                    addr: move.addr || null
+                })),
+                board: cloneBoardState(extra.board || board),
+                metadata: extra.metadata || {},
+                completed: !!gameOver
+            };
+        }
+
+        function recordFinishedGame(extra = {}) {
+            if (historyReplayState) return;
+            if (gameModeSelect.value === 'webxdc-tournament' && !tournamentState.finished) return;
+            const entry = buildGameHistoryEntry({
+                ...extra,
+                moves: currentGameMoveLog
+            });
+            gameHistory.unshift(entry);
+            gameHistory = gameHistory.slice(0, 100);
+            saveGameHistory();
+            renderGameHistory();
+        }
+
+        function renderMoveList(moves) {
+            if (!moveListEl || !moveListEmptyEl) return;
+            moveListEl.innerHTML = '';
+            if (!Array.isArray(moves) || !moves.length) {
+                moveListEmptyEl.hidden = false;
+                return;
+            }
+            moveListEmptyEl.hidden = true;
+            moves.forEach((move, index) => {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'move-list-item';
+                item.dataset.index = String(index);
+                const playerLabel = move.player === 1 ? 'B' : 'W';
+                item.innerHTML = `<span>${index + 1}. ${playerLabel}</span><span>(${move.r + 1}, ${move.c + 1})</span>`;
+                item.addEventListener('click', () => {
+                    if (!historyReplayState) return;
+                    if (historyReplayTimer) {
+                        clearInterval(historyReplayTimer);
+                        historyReplayTimer = null;
+                    }
+                    goToMoveIndex(index + 1);
+                });
+                moveListEl.appendChild(item);
+            });
+        }
+
+        function highlightMoveListItem(index) {
+            if (!moveListEl) return;
+            const items = moveListEl.querySelectorAll('.move-list-item');
+            items.forEach((item) => item.classList.remove('active'));
+            const activeIndex = index - 1;
+            if (activeIndex < 0 || activeIndex >= items.length) return;
+            const activeItem = items[activeIndex];
+            if (activeItem) {
+                activeItem.classList.add('active');
+                activeItem.scrollIntoView({ block: 'nearest' });
+            }
+        }
+
+        function renderReplayControls() {
+            if (!replayControls) return;
+            const active = !!historyReplayState;
+            replayControls.hidden = !active;
+            const totalMoves = active ? historyReplayState.moves.length : 0;
+            const atStart = !active || historyReplayState.index <= 0;
+            const atEnd = !active || historyReplayState.index >= totalMoves;
+            if (replayPrevBtn) replayPrevBtn.disabled = !active || atStart;
+            if (replayNextBtn) replayNextBtn.disabled = !active || atEnd;
+            if (replayPlayPauseBtn) {
+                replayPlayPauseBtn.textContent = historyReplayTimer ? 'Pause' : 'Play';
+                replayPlayPauseBtn.disabled = !active || totalMoves === 0;
+            }
+        }
+
+        function renderGameHistory() {
+            if (!gameHistoryList) return;
+            gameHistoryList.innerHTML = '';
+            if (!gameHistory.length) {
+                const empty = document.createElement('div');
+                empty.className = 'game-history-empty';
+                empty.textContent = 'No games yet.';
+                gameHistoryList.appendChild(empty);
+                return;
+            }
+            for (const entry of gameHistory) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'game-history-item';
+                const dateText = new Date(entry.finishedAt || entry.startedAt || Date.now()).toLocaleString();
+                const moveCount = Array.isArray(entry.moves) ? entry.moves.length : 0;
+                const resultText = entry.result?.winnerName ? ` • ${entry.result.winnerName}` : '';
+                button.textContent = `${dateText} • ${entry.mode} • ${moveCount} moves${resultText}`;
+                button.addEventListener('click', () => startReplay(entry.id, true));
+                gameHistoryList.appendChild(button);
+            }
+        }
+
+        function clearGameHistory() {
+            gameHistory = [];
+            try {
+                localStorage.removeItem(localGameHistoryStorageKey);
+            } catch (error) {
+                console.warn('Unable to clear stored game history:', error);
+            }
+            renderGameHistory();
+        }
+
+        function initializeGameHistory() {
+            loadGameHistory();
+            renderGameHistory();
+        }
+
+        function endReplay({ clearBoard = true } = {}) {
+            if (historyReplayTimer) {
+                clearInterval(historyReplayTimer);
+                historyReplayTimer = null;
+            }
+            historyReplayState = null;
+            if (replayBanner) replayBanner.hidden = true;
+            if (replayControls) replayControls.hidden = true;
+            if (clearBoard) {
+                board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
+                renderBoardFromState();
+                renderMoveList([]);
+            }
+            updateTurnIndicator();
+        }
+
+        function stopReplay() {
+            endReplay({ clearBoard: true });
+        }
+
+        if (replayPrevBtn) replayPrevBtn.addEventListener('click', () => replayStep(-1));
+        if (replayNextBtn) replayNextBtn.addEventListener('click', () => replayStep(1));
+        if (replayPlayPauseBtn) replayPlayPauseBtn.addEventListener('click', toggleReplayPlayback);
+        if (replayExitBtn) replayExitBtn.addEventListener('click', stopReplay);
+        if (gameHistoryClearBtn) gameHistoryClearBtn.addEventListener('click', clearGameHistory);
+
+        function rebuildReplayBoard() {
+            board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
+            if (!historyReplayState) return;
+            for (let i = 0; i < historyReplayState.index; i++) {
+                const move = historyReplayState.moves[i];
+                if (!move) continue;
+                if (isOnBoard(move.r, move.c)) {
+                    board[move.r][move.c] = move.player;
+                }
+            }
+            renderBoardFromState();
+        }
+
+        function goToMoveIndex(targetIndex) {
+            if (!historyReplayState) return;
+            const total = historyReplayState.moves.length;
+            const clamped = Math.max(0, Math.min(total, targetIndex));
+            historyReplayState.index = clamped;
+            if (clamped >= total && Array.isArray(historyReplayState.boardSnapshot)) {
+                board = cloneBoardState(historyReplayState.boardSnapshot);
+                renderBoardFromState();
+                gameOver = true;
+            } else {
+                gameOver = false;
+                rebuildReplayBoard();
+            }
+            currentPlayer = clamped < total
+                ? historyReplayState.moves[clamped].player
+                : total ? historyReplayState.moves[total - 1].player : 1;
+            updateTurnIndicator();
+            renderReplayControls();
+            highlightMoveListItem(clamped);
+            if (clamped >= total && historyReplayTimer) {
+                clearInterval(historyReplayTimer);
+                historyReplayTimer = null;
+                renderReplayControls();
+            }
+        }
+
+        function replayStep(direction = 1) {
+            if (!historyReplayState) return;
+            goToMoveIndex(historyReplayState.index + direction);
+        }
+
+        function toggleReplayPlayback() {
+            if (!historyReplayState) return;
+            if (historyReplayTimer) {
+                clearInterval(historyReplayTimer);
+                historyReplayTimer = null;
+            } else {
+                if (historyReplayState.index >= historyReplayState.moves.length) {
+                    goToMoveIndex(0);
+                }
+                historyReplayTimer = setInterval(() => replayStep(1), 1000);
+            }
+            renderReplayControls();
+        }
+
+        function startReplay(gameId, autoPlay = true) {
+            const entry = gameHistory.find((item) => item.id === gameId);
+            if (!entry) return;
+            endReplay({ clearBoard: true });
+            const moves = getReplayMoves(entry);
+            const boardSnapshot = Array.isArray(entry.board) ? entry.board : null;
+            gameModeSelect.value = 'pvp';
+            initBoard(false);
+            historyReplayState = { entry, index: 0, moves, boardSnapshot };
+            board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
+            renderBoardFromState();
+            renderMoveList(moves);
+            highlightMoveListItem(0);
+            if (replayBanner) {
+                replayBanner.textContent = `Replaying: ${new Date(entry.finishedAt || entry.startedAt || Date.now()).toLocaleString()}`;
+                replayBanner.hidden = false;
+            }
+            renderReplayControls();
+            if (autoPlay) {
+                replayStep(1);
+                historyReplayTimer = setInterval(() => replayStep(1), 1000);
+            }
         }
 
         function isWebxdcNetworkMode() {
@@ -1263,7 +1775,7 @@
                     player: currentPlayer,
                     elapsedMs
                 });
-                applyPieceLocally(move.r, move.c);
+                applyPieceLocally(move.r, move.c, currentPlayer);
             };
             worker.onerror = () => {
                 isComputerThinking = false;
@@ -1817,6 +2329,15 @@
                 });
             }
             playWinSound();
+            recordFinishedGame({
+                metadata: {
+                    finishType: 'timeout',
+                    loserPlayer,
+                    winnerPlayer,
+                    loserPeerId,
+                    winnerPeerId
+                }
+            });
             if (gameModeSelect.value === 'webxdc-tournament') {
                 advanceTournamentMatch(winnerPeerId || networkPlayers[winnerPlayer] || null);
             }
@@ -2005,6 +2526,13 @@
                 });
             }
             playWinSound();
+            recordFinishedGame({
+                metadata: {
+                    finishType: 'withdrawal',
+                    quitterPeerId,
+                    winnerPeerId
+                }
+            });
             if (gameModeSelect.value === 'webxdc-tournament') {
                 advanceTournamentMatch(winnerPeerId);
             }
@@ -2427,7 +2955,7 @@
 
                 currentPlayer = payload.player;
                 syncMyAssignedPlayer();
-                applyPieceLocally(payload.r, payload.c);
+                applyPieceLocally(payload.r, payload.c, payload.player);
             } else if (payload.action === 'WITHDRAWAL') {
                 // Resolve canonical IDs — quitter/winner may be stored under old canonical IDs
                 const withdrawalAddr = normalizeAddr(payload.addr || senderAddr);
@@ -3060,6 +3588,31 @@
             return { inset, usableSize, step };
         }
 
+        function renderBoardNumbering() {
+            if (!boardElement) return;
+            const { inset, step } = getBoardLayoutMetrics();
+            const existing = boardElement.querySelectorAll('.board-axis-label');
+            existing.forEach((node) => node.remove());
+
+            for (let i = 0; i < boardSize; i++) {
+                if (i > 0) {
+                    const rowLabel = document.createElement('div');
+                    rowLabel.className = 'board-axis-label';
+                    rowLabel.textContent = String(i + 1);
+                    rowLabel.style.left = `${Math.max(4, inset * 0.35)}px`;
+                    rowLabel.style.top = `${inset + (i * step) - 7}px`;
+                    boardElement.appendChild(rowLabel);
+                }
+
+                const colLabel = document.createElement('div');
+                colLabel.className = 'board-axis-label';
+                colLabel.textContent = String(i + 1);
+                colLabel.style.left = `${inset + (i * step) - 6}px`;
+                colLabel.style.top = `${Math.max(4, inset * 0.35)}px`;
+                boardElement.appendChild(colLabel);
+            }
+        }
+
         function positionBoardCells() {
             if (!boardElement) return;
             const { inset, step } = getBoardLayoutMetrics();
@@ -3079,6 +3632,8 @@
                 cell.style.height = `${hitbox}px`;
                 cell.style.margin = '0';
             });
+
+            renderBoardNumbering();
         }
 
         function renderBoardFromState() {
@@ -3602,8 +4157,11 @@
         });
 
         function initBoard(sendNetworkUpdate = false, options = {}) {
+            stopReplay();
             boardElement.innerHTML = '';
             board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
+            currentGameMoveLog = [];
+            renderMoveList([]);
             gameOver = false;
             currentPlayer = 1;
             resetPlayerGameClocks();
@@ -3684,6 +4242,8 @@
                     boardElement.appendChild(cell);
                 }
             }
+
+            initializeGameHistory();
             positionBoardCells();
             updateTurnIndicator();
             updateConnectionIndicator();
@@ -3835,7 +4395,7 @@
 
                 // Optimistic UI: Apply it immediately to the local board
                 syncMyAssignedPlayer();
-                applyPieceLocally(r, c);
+                applyPieceLocally(r, c, playedAs);
 
                 // Broadcast it silently to the chat network
                 if (window.webxdc) {
@@ -3850,25 +4410,48 @@
             }
 
             // Local Modes
-            applyPieceLocally(r, c);
+            applyPieceLocally(r, c, currentPlayer);
         }
 
-        function applyPieceLocally(r, c) {
-            board[r][c] = currentPlayer;
+        function applyPieceLocally(r, c, playedBy = currentPlayer) {
+            if (!historyReplayState) {
+                currentGameMoveLog.push({
+                    moveNumber: currentGameMoveLog.length + 1,
+                    r,
+                    c,
+                    player: playedBy,
+                    at: Date.now(),
+                    source: gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament'
+                        ? 'network'
+                        : 'local',
+                    peerId: gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament'
+                        ? networkPlayers[playedBy] || null
+                        : null,
+                    name: gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament'
+                        ? displayNameForPeer(networkPlayers[playedBy] || null)
+                        : (playedBy === 1 ? p1NameInput.value : p2NameInput.value),
+                    addr: gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament'
+                        ? myAddr
+                        : null
+                });
+                renderMoveList(currentGameMoveLog);
+                highlightMoveListItem(currentGameMoveLog.length);
+            }
+            board[r][c] = playedBy;
             const piece = document.createElement('div');
-            piece.classList.add('piece', currentPlayer === 1 ? 'black' : 'white');
+            piece.classList.add('piece', playedBy === 1 ? 'black' : 'white');
             
             const cell = document.querySelector(`.cell[data-row="${r}"][data-col="${c}"]`);
             cell.appendChild(piece);
             playMoveSound();
 
-            if (checkWin(r, c, currentPlayer)) {
+            if (checkWin(r, c, playedBy)) {
                 gameOver = true;
                 turnDeadlineTs = null;
                 stopMoveTimerInterval();
-                handleWin(currentPlayer);
+                handleWin(playedBy);
             } else {
-                const previousPlayer = currentPlayer;
+                const previousPlayer = playedBy;
                 freezePlayerTimer(previousPlayer);
                 currentPlayer = previousPlayer === 1 ? 2 : 1;
                 updateTurnIndicator();
@@ -4327,6 +4910,13 @@
                 });
             }
             playWinSound();
+            recordFinishedGame({
+                metadata: {
+                    finishType: 'win',
+                    winnerPlayer: player,
+                    winnerPeerId: winnerPeerId || null
+                }
+            });
             if (gameModeSelect.value === 'webxdc-tournament') {
                 advanceTournamentMatch(winnerPeerId || networkPlayers[player] || null);
                 tournamentSingleRemainingConfirmation.pending = false;

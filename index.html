@@ -14,6 +14,12 @@
             --line-color: rgba(42, 24, 12, 0.72);
         }
 
+        html, body {
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+        }
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: #2c3e50;
@@ -21,14 +27,65 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            margin: 0;
             padding: 20px;
             width: 100%;
             box-sizing: border-box;
-            overflow-x: hidden;
+            overflow: hidden;
         }
         body.debug-open {
             align-items: flex-start;
+        }
+
+        .app-layout {
+            display: flex;
+            justify-content: center;
+            align-items: stretch;
+            width: 100%;
+            max-width: 1500px;
+            height: calc(100vh - 94px);
+            max-height: calc(100vh - 94px);
+            gap: 24px;
+            padding-right: 52px;
+            box-sizing: border-box;
+            transition: padding-right 0.2s ease;
+            overflow: hidden;
+        }
+
+        body.notifications-open .app-layout {
+            padding-right: 420px;
+        }
+
+        .left-rail,
+        .right-rail {
+            display: flex;
+            flex-direction: column;
+            width: min(280px, 24vw);
+            min-width: 220px;
+            gap: 16px;
+            flex-shrink: 0;
+            height: 100%;
+            max-height: 100%;
+            overflow: hidden;
+        }
+
+        .left-rail > * {
+            flex-shrink: 0;
+            flex-basis: auto;
+        }
+
+        .right-rail {
+            padding-right: 10px;
+        }
+
+        .center-column {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex: 1;
+            min-width: 0;
+            height: 100%;
+            max-height: 100%;
+            overflow: hidden;
         }
 
         h1 { margin-top: 0; margin-bottom: 10px; font-size: 28px; }
@@ -71,17 +128,20 @@
             border-radius: 8px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.3);
             font-size: 14px;
+            display: flex;
+            flex-direction: column;
         }
         .all-players-scoreboard h3 {
             margin: 0 0 8px 0;
             font-size: 15px;
             color: #f1c40f;
+            flex-shrink: 0;
         }
         .all-players-scoreboard .score-row {
             display: flex;
             justify-content: space-between;
             gap: 8px;
-            padding: 3px 0;
+            padding: 3px 6px;
         }
         .all-players-scoreboard .score-row .score-name {
             overflow: hidden;
@@ -121,11 +181,16 @@
             border-radius: 8px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.3);
             font-size: 14px;
+            display: flex;
+            flex-direction: column;
+            max-height: 100%;
+            overflow: hidden;
         }
         .game-history-panel h3 {
             margin: 0 0 8px 0;
             font-size: 15px;
             color: #f1c40f;
+            flex-shrink: 0;
         }
         .game-history-header {
             display: flex;
@@ -133,9 +198,11 @@
             align-items: center;
             gap: 8px;
             margin-bottom: 8px;
+            flex-shrink: 0;
         }
         .game-history-clear-btn {
             padding: 4px 8px;
+            margin-right: 16px;
             font-size: 11px;
             border: none;
             border-radius: 4px;
@@ -147,6 +214,9 @@
             display: flex;
             flex-direction: column;
             gap: 8px;
+            overflow-y: auto;
+            min-height: 0;
+            padding-right: 16px;
         }
         .game-history-empty {
             color: #c8d6e5;
@@ -162,29 +232,36 @@
         .game-history-item:hover {
             background: #5f7892;
         }
-        .replay-banner {
-            width: 100%;
-            max-width: 600px;
-            margin: 0 0 14px 0;
-            padding: 10px 12px;
-            background: #1f2d3a;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-            color: #f1c40f;
-            font-weight: 700;
-            text-align: center;
+        .game-history-item.active {
+            background: #607b96;
+            border-color: #f1c40f;
+            box-shadow: inset 0 0 0 1px rgba(241, 196, 15, 0.8);
         }
         .replay-controls {
-            width: 100%;
-            max-width: 600px;
+            width: 56px;
+            min-width: 56px;
             margin: 0 0 14px 0;
             display: flex;
+            flex-direction: column;
             gap: 8px;
-            flex-wrap: wrap;
             justify-content: center;
+            align-items: stretch;
+            flex-shrink: 0;
         }
         .replay-controls button {
             background: #52677d;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 42px;
+            padding: 8px;
+            font-size: 22px;
+            line-height: 1;
+        }
+
+        .replay-controls button:disabled {
+            opacity: 0.45;
         }
 
         .board-area {
@@ -195,35 +272,56 @@
             gap: 16px;
             width: 100%;
             max-width: 900px;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .move-list-stack {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            width: 100%;
+            max-width: 100%;
+            overflow: hidden;
         }
 
         .move-list-panel {
             width: 200px;
-            max-height: min(620px, 80vh);
-            overflow-y: auto;
+            height: clamp(220px, 35vh, 500px);
+            min-height: 220px;
+            max-height: 300px;
             background: rgba(0, 0, 0, 0.25);
             border-radius: 10px;
             padding: 10px;
             box-sizing: border-box;
             flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
 
         .move-list-panel h3 {
             margin: 0 0 8px 0;
             font-size: 14px;
             text-align: center;
+            flex-shrink: 0;
+            color: #f1c40f;
         }
 
         .move-list-empty {
             font-size: 12px;
             opacity: 0.7;
             text-align: center;
+            flex-shrink: 0;
         }
 
         .move-list {
             display: flex;
             flex-direction: column;
             gap: 2px;
+            overflow-y: auto;
+            min-height: 0;
+            padding-right: 4px;
         }
 
         .move-list-item {
@@ -366,11 +464,24 @@
             flex-wrap: wrap;
             justify-content: center;
             align-items: center;
+            padding: 16px 14px;
+            border: 1px solid rgba(255,255,255,0.25);
+            border-radius: 10px;
+            background: rgba(52, 73, 94, 0.7);
+            box-sizing: border-box;
+        }
+        .controls-heading {
+            width: 100%;
+            font-size: 15px;
+            font-weight: 700;
+            color: #f1c40f;
+            text-align: left;
+            margin-bottom: -4px;
         }
         .control-group { display: flex; align-items: center; gap: 8px; }
         .control-group label { font-weight: 700; color: #ecf0f1; }
         select, button { padding: 10px 15px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; }
-        select { background-color: #ecf0f1; color: #2c3e50; font-weight: bold; }
+        select { background-color: #ecf0f1; color: #2c3e50; font-weight: bold; padding-left: 8px; padding-right: 8px; }
         button { background-color: #27ae60; color: white; transition: background 0.3s; }
         button:hover { background-color: #2ecc71; }
         button:disabled { background-color: #7f8c8d; cursor: not-allowed; }
@@ -609,67 +720,78 @@
 
     <h1 id="title">Let's Gomoku!</h1>
 
-    <div class="all-players-scoreboard" id="all-players-scoreboard">
-        <h3>Players Scoreboard</h3>
-        <div class="score-row"><span class="score-name">No players yet</span><span class="score-value">0</span></div>
-    </div>
-
-    <div class="controls">
-        <select id="game-mode">
-            <option value="webxdc">Network (2 players)</option>
-            <option value="webxdc-tournament">Network (Tournament)</option>
-            <option value="pvp">Local Pass & Play</option>
-            <option value="pve">Local vs Computer</option>
-        </select>
-        <div class="control-group" id="difficulty-control" hidden>
-            <label for="difficulty-select">Difficulty</label>
-            <select id="difficulty-select">
-                <option value="2">Easy</option>
-                <option value="4" selected>Medium</option>
-                <option value="6">Hard</option>
-            </select>
-        </div>
-        <button id="reset-btn">Reset Board / Sync</button>
-    </div>
-
-    <div class="current-match-panel">
-        <div class="current-match-meta" id="current-match-meta">Current Match</div>
-        <div class="dashboard">
-            <div class="player-info">
-                <input type="text" id="p1-name" value="Waiting for P1 (Black)">
+    <div class="app-layout">
+        <div class="left-rail">
+            <div class="game-history-panel" id="game-history-panel">
+                <div class="game-history-header">
+                    <h3>Game History</h3>
+                    <button type="button" class="game-history-clear-btn" id="game-history-clear-btn">Clear History</button>
+                </div>
+                <div class="game-history-list" id="game-history-list"></div>
             </div>
-            <div class="player-info">
-                <input type="text" id="p2-name" value="Waiting for P2 (White)">
+
+            <div class="move-list-stack">
+                <div class="move-list-panel" id="move-list-panel">
+                    <h3>Move List</h3>
+                    <div class="move-list-empty" id="move-list-empty">No moves yet.</div>
+                    <div class="move-list" id="move-list"></div>
+                </div>
+
+                <div class="replay-controls" id="replay-controls" hidden>
+                    <button id="replay-prev-btn" type="button" aria-label="Previous move">⏮️</button>
+                    <button id="replay-playpause-btn" type="button" aria-label="Play replay">▶️</button>
+                    <button id="replay-next-btn" type="button" aria-label="Next move">⏭️</button>
+                    <button id="replay-exit-btn" type="button" aria-label="Exit replay">⏹️</button>
+                </div>
             </div>
         </div>
-    </div>
 
-    <div class="turn-indicator" id="turn-indicator">Current Turn: Waiting for P1 (Black)</div>
-    <div class="move-timer" id="move-timer">Move Timer: --</div>
+        <div class="center-column">
+            <div class="turn-indicator" id="turn-indicator">Current Turn: Waiting for P1 (Black)</div>
+            <div class="move-timer" id="move-timer">Move Timer: --</div>
 
-    <div class="board-area">
-        <div id="board"></div>
-        <div class="move-list-panel" id="move-list-panel">
-            <h3>Move List</h3>
-            <div class="move-list-empty" id="move-list-empty">No moves yet.</div>
-            <div class="move-list" id="move-list"></div>
+            <div class="board-area">
+                <div id="board"></div>
+            </div>
         </div>
-    </div>
 
-    <div class="replay-banner" id="replay-banner" hidden></div>
-    <div class="replay-controls" id="replay-controls" hidden>
-        <button id="replay-prev-btn" type="button">Prev</button>
-        <button id="replay-playpause-btn" type="button">Play</button>
-        <button id="replay-next-btn" type="button">Next</button>
-        <button id="replay-exit-btn" type="button">Exit Replay</button>
-    </div>
+        <div class="right-rail">
+            <div class="all-players-scoreboard" id="all-players-scoreboard">
+                <h3>Players Scoreboard</h3>
+                <div class="score-row"><span class="score-name">No players yet</span><span class="score-value">0</span></div>
+            </div>
 
-    <div class="game-history-panel" id="game-history-panel">
-        <div class="game-history-header">
-            <h3>Game History</h3>
-            <button type="button" class="game-history-clear-btn" id="game-history-clear-btn">Clear History</button>
+            <div class="controls" aria-label="Mode controls">
+                <div class="controls-heading">Mode</div>
+                <select id="game-mode">
+                    <option value="webxdc">Network (2 players)</option>
+                    <option value="webxdc-tournament">Network (Tournament)</option>
+                    <option value="pvp">Local Pass & Play</option>
+                    <option value="pve">Local vs Computer</option>
+                </select>
+                <div class="control-group" id="difficulty-control" hidden>
+                    <label for="difficulty-select">Difficulty</label>
+                    <select id="difficulty-select">
+                        <option value="2">Easy</option>
+                        <option value="4" selected>Medium</option>
+                        <option value="6">Hard</option>
+                    </select>
+                </div>
+                <button id="reset-btn">Reset Board / Sync</button>
+            </div>
+
+            <div class="current-match-panel">
+                <div class="current-match-meta" id="current-match-meta">Current Match</div>
+                <div class="dashboard">
+                    <div class="player-info">
+                        <input type="text" id="p1-name" value="Waiting for P1 (Black)">
+                    </div>
+                    <div class="player-info">
+                        <input type="text" id="p2-name" value="Waiting for P2 (White)">
+                    </div>
+                </div>
+            </div>
         </div>
-        <div class="game-history-list" id="game-history-list"></div>
     </div>
 
     <canvas id="fireworksCanvas"></canvas>
@@ -779,7 +901,7 @@
         let notificationsDragState = null;
         let notificationsTabClickSuppressed = false;
         const compactNotificationsQuery = window.matchMedia('(max-width: 768px)');
-        let notificationsMinimized = false;
+        let notificationsMinimized = true;
         let notificationsTabTop = Math.floor(window.innerHeight / 2);
         let webxdcRealtimeChannel = null;
         let outgoingMessageSeq = 0;
@@ -957,6 +1079,7 @@
             const anyPanelOpen = debugPopup.classList.contains('visible')
                 || (notificationsPopup.classList.contains('visible') && !notificationsPopup.classList.contains('minimized'));
             document.body.classList.toggle('debug-open', anyPanelOpen);
+            document.body.classList.toggle('notifications-open', notificationsPopup && notificationsPopup.classList.contains('visible') && !notificationsPopup.classList.contains('minimized'));
         }
 
         function updateNotificationsPanelState() {
@@ -1070,9 +1193,10 @@
                 name: null,
                 addr: null
             }));
+            const isTournamentGame = extra.isTournament === true || extra.mode === 'webxdc-tournament' || gameModeSelect.value === 'webxdc-tournament';
             return {
                 id: `game:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-                mode: gameModeSelect.value,
+                mode: extra.mode || gameModeSelect.value,
                 startedAt: extra.startedAt || Date.now(),
                 finishedAt: extra.finishedAt || Date.now(),
                 players: {
@@ -1092,17 +1216,21 @@
                     addr: move.addr || null
                 })),
                 board: cloneBoardState(extra.board || board),
-                metadata: extra.metadata || {},
+                metadata: {
+                    ...(extra.metadata || {}),
+                    tournament: isTournamentGame
+                },
                 completed: !!gameOver
             };
         }
 
         function recordFinishedGame(extra = {}) {
             if (historyReplayState) return;
-            if (gameModeSelect.value === 'webxdc-tournament' && !tournamentState.finished) return;
             const entry = buildGameHistoryEntry({
                 ...extra,
-                moves: currentGameMoveLog
+                moves: currentGameMoveLog,
+                mode: extra.mode || gameModeSelect.value,
+                isTournament: extra.isTournament ?? (gameModeSelect.value === 'webxdc-tournament')
             });
             gameHistory.unshift(entry);
             gameHistory = gameHistory.slice(0, 100);
@@ -1153,15 +1281,22 @@
         function renderReplayControls() {
             if (!replayControls) return;
             const active = !!historyReplayState;
-            replayControls.hidden = !active;
+            replayControls.hidden = false;
             const totalMoves = active ? historyReplayState.moves.length : 0;
             const atStart = !active || historyReplayState.index <= 0;
             const atEnd = !active || historyReplayState.index >= totalMoves;
             if (replayPrevBtn) replayPrevBtn.disabled = !active || atStart;
             if (replayNextBtn) replayNextBtn.disabled = !active || atEnd;
             if (replayPlayPauseBtn) {
-                replayPlayPauseBtn.textContent = historyReplayTimer ? 'Pause' : 'Play';
-                replayPlayPauseBtn.disabled = !active || totalMoves === 0;
+                const isPaused = !historyReplayTimer;
+                replayPlayPauseBtn.textContent = isPaused ? '▶️' : '⏸️';
+                replayPlayPauseBtn.setAttribute('aria-label', isPaused ? 'Play replay' : 'Pause replay');
+                replayPlayPauseBtn.disabled = totalMoves === 0;
+            }
+            if (replayExitBtn) {
+                replayExitBtn.textContent = '⏹️';
+                replayExitBtn.setAttribute('aria-label', 'Exit replay');
+                replayExitBtn.disabled = !active;
             }
         }
 
@@ -1179,11 +1314,18 @@
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'game-history-item';
+                if (historyReplayState && historyReplayState.entry && historyReplayState.entry.id === entry.id) {
+                    button.classList.add('active');
+                }
                 const dateText = new Date(entry.finishedAt || entry.startedAt || Date.now()).toLocaleString();
                 const moveCount = Array.isArray(entry.moves) ? entry.moves.length : 0;
                 const resultText = entry.result?.winnerName ? ` • ${entry.result.winnerName}` : '';
-                button.textContent = `${dateText} • ${entry.mode} • ${moveCount} moves${resultText}`;
-                button.addEventListener('click', () => startReplay(entry.id, true));
+                const tournamentBadge = entry.mode === 'webxdc-tournament' || entry.metadata?.tournament ? ' 🏆 Tournament' : '';
+                button.textContent = `${dateText} • ${entry.mode}${tournamentBadge} • ${moveCount} moves${resultText}`;
+                button.addEventListener('click', () => {
+                    startReplay(entry.id, false);
+                    renderGameHistory();
+                });
                 gameHistoryList.appendChild(button);
             }
         }
@@ -1209,7 +1351,6 @@
                 historyReplayTimer = null;
             }
             historyReplayState = null;
-            if (replayBanner) replayBanner.hidden = true;
             if (replayControls) replayControls.hidden = true;
             if (clearBoard) {
                 board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
@@ -1300,11 +1441,8 @@
             renderBoardFromState();
             renderMoveList(moves);
             highlightMoveListItem(0);
-            if (replayBanner) {
-                replayBanner.textContent = `Replaying: ${new Date(entry.finishedAt || entry.startedAt || Date.now()).toLocaleString()}`;
-                replayBanner.hidden = false;
-            }
             renderReplayControls();
+            renderGameHistory();
             if (autoPlay) {
                 replayStep(1);
                 historyReplayTimer = setInterval(() => replayStep(1), 1000);
@@ -5064,6 +5202,8 @@
             renderNotifications();
             debugLog('NOTIFICATIONS_CLEARED', {});
         });
+        updateNotificationsPanelState();
+
         if (notificationsToggleBtn) {
             notificationsToggleBtn.addEventListener('click', () => toggleNotificationsPanel());
         }
@@ -5322,7 +5462,7 @@
         ensurePlayerScoreEntry(myPeerId);
         updateAllPlayersScoreboard();
         renderNotifications();
-        showNotificationsPanel();
+        hideNotificationsPanel();
         startRealtimeChannel();
         startPresenceSync();
         startPlayerExitMonitor();

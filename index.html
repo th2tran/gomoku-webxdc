@@ -65,7 +65,7 @@
             flex-shrink: 0;
             height: 100%;
             max-height: 100%;
-            overflow: hidden;
+            overflow: visible;
         }
 
         .left-rail > * {
@@ -150,6 +150,39 @@
         }
         .all-players-scoreboard .score-row .score-value {
             font-weight: bold;
+        }
+        .connected-peers-panel {
+            width: 100%;
+            max-width: 600px;
+            margin: 0 0 14px 0;
+            padding: 10px 12px;
+            background: #34495e;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            font-size: 14px;
+            display: flex;
+            flex-direction: column;
+        }
+        .connected-peers-panel h3 {
+            margin: 0 0 8px 0;
+            font-size: 15px;
+            color: #f1c40f;
+            flex-shrink: 0;
+        }
+        .connected-peers-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .connected-peers-empty {
+            color: #c8d6e5;
+            font-style: italic;
+        }
+        .connected-peers-item {
+            padding: 3px 6px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
         .current-match-panel {
             width: 100%;
@@ -238,8 +271,8 @@
             box-shadow: inset 0 0 0 1px rgba(241, 196, 15, 0.8);
         }
         .replay-controls {
-            width: 56px;
-            min-width: 56px;
+            width: 74px;
+            min-width: 74px;
             margin: 0 0 14px 0;
             display: flex;
             flex-direction: column;
@@ -247,9 +280,14 @@
             justify-content: center;
             align-items: stretch;
             flex-shrink: 0;
+            padding: 8px;
+            border: 1px solid rgba(255,255,255,0.25);
+            border-radius: 10px;
+            background: rgba(52, 73, 94, 0.7);
+            box-sizing: border-box;
         }
         .replay-controls button {
-            background: #52677d;
+            background: transparent;
             width: 100%;
             display: flex;
             align-items: center;
@@ -258,10 +296,15 @@
             padding: 8px;
             font-size: 22px;
             line-height: 1;
+            border: none;
+            box-shadow: none;
         }
 
         .replay-controls button:disabled {
-            opacity: 0.45;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.32);
+            opacity: 1;
+            cursor: not-allowed;
         }
 
         .board-area {
@@ -282,7 +325,7 @@
             gap: 12px;
             width: 100%;
             max-width: 100%;
-            overflow: hidden;
+            overflow: visible;
         }
 
         .move-list-panel {
@@ -356,6 +399,10 @@
             .move-list-panel {
                 width: min(100%, 620px);
                 max-height: 240px;
+            }
+            .replay-controls {
+                width: min(100%, 620px);
+                min-width: 0;
             }
         }
 
@@ -831,6 +878,10 @@
                 min-width: 0;
                 height: clamp(200px, 32vh, 360px);
             }
+            .replay-controls {
+                width: auto;
+                min-width: 0;
+            }
         }
 
         /* --- Very small phones (iPhone SE / Pixel portrait) --- */
@@ -867,6 +918,12 @@
 
     <div class="app-layout">
         <div class="left-rail">
+            <div class="connected-peers-panel" id="connected-peers-panel">
+                <h3>Connected Peers</h3>
+                <div class="connected-peers-list" id="connected-peers-list">
+                    <div class="connected-peers-empty">No peers connected.</div>
+                </div>
+            </div>
             <div class="game-history-panel" id="game-history-panel">
                 <div class="game-history-header">
                     <h3>Game History</h3>
@@ -994,6 +1051,7 @@
 
         const boardElement = document.getElementById('board');
         const allPlayersScoreboard = document.getElementById('all-players-scoreboard');
+        const connectedPeersListEl = document.getElementById('connected-peers-list');
         const gameHistoryPanel = document.getElementById('game-history-panel');
         const gameHistoryList = document.getElementById('game-history-list');
         const gameHistoryClearBtn = document.getElementById('game-history-clear-btn');
@@ -2743,6 +2801,7 @@
             if (networkPlayers[2] === peerId) networkPlayers[2] = null;
             syncMyAssignedPlayer();
             updateConnectionIndicator();
+            updateConnectedPeersPanel();
             updateAllPlayersScoreboard();
             updateTurnIndicator();
 
@@ -3185,8 +3244,6 @@
 
             if (payload.action === 'JOIN' || payload.action === 'PRESENCE') return;
 
-            if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
-
             if (payload.action === 'STATE') {
                 applyStatePayload(payload, meta);
             } else if (payload.action === 'TOURNAMENT_MODE') {
@@ -3199,6 +3256,9 @@
                     return;
                 }
                 if (payload.mode === 'webxdc-tournament') {
+                    if (gameModeSelect.value !== 'webxdc-tournament') {
+                        initBoard(false);
+                    }
                     beginTournamentMode({
                         fromRemote: true,
                         pairIndex: Number.isInteger(payload.pairIndex) ? payload.pairIndex : 0,
@@ -3589,6 +3649,56 @@
             });
         }
 
+        function updateConnectedPeersPanel() {
+            if (!connectedPeersListEl) return;
+            const peersByKey = new Map();
+            for (const [peerId, record] of Object.entries(connectedPlayers)) {
+                if (!peerId || peerId === myPeerId || knownLeftPeers.has(peerId)) continue;
+                const addr = normalizeAddr(record?.addr) || '';
+                const canonicalPeerId = getCanonicalPeerId(peerId, addr) || peerId;
+                const key = addr || canonicalPeerId;
+                const current = peersByKey.get(key);
+                const next = {
+                    peerId: canonicalPeerId,
+                    name: displayNameForPeer(canonicalPeerId),
+                    isLocal: peerRepresentsLocalPlayer(canonicalPeerId),
+                    addr
+                };
+                if (!current) {
+                    peersByKey.set(key, next);
+                    continue;
+                }
+                const currentIsLocal = !!current.isLocal;
+                const nextIsLocal = !!next.isLocal;
+                if (nextIsLocal && !currentIsLocal) {
+                    peersByKey.set(key, next);
+                    continue;
+                }
+                if (!current.name || current.name.startsWith('Player ')) {
+                    peersByKey.set(key, next);
+                }
+            }
+
+            const peers = Array.from(peersByKey.values())
+                .sort((a, b) => a.name.localeCompare(b.name));
+
+            connectedPeersListEl.innerHTML = '';
+            if (!peers.length) {
+                const empty = document.createElement('div');
+                empty.className = 'connected-peers-empty';
+                empty.textContent = 'No peers connected.';
+                connectedPeersListEl.appendChild(empty);
+                return;
+            }
+
+            for (const peer of peers) {
+                const item = document.createElement('div');
+                item.className = 'connected-peers-item';
+                item.textContent = `${peer.name}${peer.isLocal ? ' (you)' : ''}`;
+                connectedPeersListEl.appendChild(item);
+            }
+        }
+
         function buildPeerRosterSnapshot() {
             const byKey = new Map();
             const addEntry = (peerId, name, addr) => {
@@ -3623,7 +3733,7 @@
         }
 
         function requestPeerListSync(reason = 'startup') {
-            if (!window.webxdc || (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament')) return;
+            if (!window.webxdc) return;
             const payload = {
                 action: 'PEER_LIST_REQUEST',
                 requesterPeerId: myPeerId,
@@ -3654,7 +3764,7 @@
         }
 
         function sendPeerListSync(reason = 'startup') {
-            if (!window.webxdc || (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament')) return;
+            if (!window.webxdc) return;
             const peers = buildPeerRosterSnapshot();
             const payload = {
                 action: 'PEER_LIST_SYNC',
@@ -3809,7 +3919,7 @@
         // 'JOIN' announces us to the chat. 'PRESENCE' is the quiet reply an existing
         // player sends back to a newcomer, so discovery works in both directions.
         function announcePresence(action = 'JOIN') {
-            if (!window.webxdc || (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament')) return;
+            if (!window.webxdc) return;
 
             rememberConnectedPlayer(myPeerId, myName, myAddr);
 
@@ -3855,6 +3965,7 @@
             }, 0);
             debugLog('SET_UPDATE_LISTENER_READY', {});
         }
+        updateConnectedPeersPanel();
 
         function isOnBoard(r, c) {
             return Number.isInteger(r) && r >= 0 && r < boardSize
@@ -4358,6 +4469,7 @@
             updateTurnIndicator();
             startMoveTimerForCurrentTurn({ resetDeadline: !Number.isFinite(turnDeadlineTs) });
             updateConnectionIndicator();
+            updateConnectedPeersPanel();
             updateAllPlayersScoreboard();
             maybeHandleTournamentExpiry();
             debugLog('STATE_APPLIED', {
@@ -4396,6 +4508,7 @@
             }
             resetBtn.disabled = tournamentInProgress;
             updateDifficultyControlVisibility();
+            updateConnectedPeersPanel();
         }
 
         function resetTournamentProgress(seatSeed = createSeatSeed(), deadlineTs = Date.now() + tournamentDurationMs) {
@@ -4425,6 +4538,7 @@
             scores[2] = 0;
             gameStartAnnounced = false;
             tournamentPlayerAddrLock.clear();
+            updateConnectedPeersPanel();
             updateAllPlayersScoreboard();
         }
 
@@ -5839,7 +5953,6 @@
         startPresenceSync();
         startPlayerExitMonitor();
         setTimeout(() => {
-            if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
             requestPeerListSync('startup');
             sendPeerListSync('startup');
         }, 1000);

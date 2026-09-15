@@ -2276,6 +2276,13 @@
             networkPlayers[2] = randomizedPair[1] || null;
             syncMyAssignedPlayer();
             setNetworkPlayerLabels();
+            if (networkPlayers[1] && networkPlayers[2]) {
+                tournamentPlayerAddrLock.clear();
+                const p1Addr = getAddrForPeer(networkPlayers[1]);
+                const p2Addr = getAddrForPeer(networkPlayers[2]);
+                if (p1Addr) tournamentPlayerAddrLock.set(p1Addr, networkPlayers[1]);
+                if (p2Addr) tournamentPlayerAddrLock.set(p2Addr, networkPlayers[2]);
+            }
             if (!networkPlayers[1] || !networkPlayers[2]) {
                 currentPlayer = 1;
                 turnDeadlineTs = null;
@@ -2390,6 +2397,17 @@
 
         function maybeFinalizeTournamentForSingleRemainingPlayer() {
             if (gameModeSelect.value !== 'webxdc-tournament' || tournamentState.finished) return false;
+            // If the board still has an active game but the tournament state already
+            // fell behind, advance it first so a stale turn cannot block finalization.
+            if (!gameOver && countMoves(board) > 0 && networkPlayers[1] && networkPlayers[2]) {
+                const activePeerId = Number.isInteger(currentPlayer) && networkPlayers[currentPlayer]
+                    ? networkPlayers[currentPlayer]
+                    : null;
+                if (!activePeerId || peerRepresentsLocalPlayer(activePeerId)) {
+                    updateTournamentMatchState(tournamentState.pairIndex);
+                    return false;
+                }
+            }
             // Never let a leaving peer self-finalize the tournament; only live peers may confirm
             // a single remaining player after a roster sync.
             if (tournamentSingleRemainingConfirmation.pending) return false;
@@ -2474,6 +2492,8 @@
             if (!tournamentState.enabled || tournamentState.finished) return;
             tournamentState.finished = true;
             tournamentState.enabled = false;
+            networkPlayers = { 1: null, 2: null };
+            myAssignedPlayer = null;
             tournamentState.countdownDeadlineTs = null;
             tournamentState.deadlineTs = null;
             if (tournamentState.countdownTimer) {
@@ -2511,11 +2531,11 @@
             if (gameModeSelect.value !== 'webxdc-tournament' || !tournamentState.enabled) return;
             tournamentState.pairings = getTournamentPairings();
             if (!Array.isArray(tournamentState.pairings) || !tournamentState.pairings.length) {
-                setTimeout(() => finalizeTournament(), 400);
+                setTimeout(() => finalizeTournament(), 5000);
                 return;
             }
             if (isTournamentClockExpired(Date.now())) {
-                setTimeout(() => finalizeTournament(), 400);
+                setTimeout(() => finalizeTournament(), 5000);
                 return;
             }
             const nextIndex = tournamentState.pairIndex + 1;
@@ -2556,7 +2576,7 @@
                 if (window.webxdc) {
                     broadcastStateSync('tournament-next-match');
                 }
-            }, 600);
+            }, 5000);
         }
 
         function getPlayerDisplayName(playerNumber, peerId = null) {
@@ -3259,6 +3279,7 @@
                     if (gameModeSelect.value !== 'webxdc-tournament') {
                         initBoard(false);
                     }
+                    tournamentPlayerAddrLock.clear();
                     beginTournamentMode({
                         fromRemote: true,
                         pairIndex: Number.isInteger(payload.pairIndex) ? payload.pairIndex : 0,
@@ -3908,6 +3929,7 @@
                     updateTournamentMatchState(tournamentState.pairIndex);
                 }
             }
+            updateConnectedPeersPanel();
             debugLog('PEER_LIST_SYNC_APPLIED', {
                 sourcePeerId: sourcePeerId || null,
                 peerCount: peers.length,
@@ -4533,6 +4555,7 @@
             }
             networkPlayers = { 1: null, 2: null };
             myAssignedPlayer = null;
+            tournamentPlayerAddrLock.clear();
             playerScoresByPeer = {};
             scores[1] = 0;
             scores[2] = 0;
@@ -4830,6 +4853,11 @@
                         const seatPair = getTournamentSeatAssignment(matchPair, tournamentState.pairIndex, tournamentState.seatSeed, tournamentState.matchNumber);
                         networkPlayers[1] = seatPair[0] || null;
                         networkPlayers[2] = seatPair[1] || null;
+                        tournamentPlayerAddrLock.clear();
+                        const p1Addr = getAddrForPeer(networkPlayers[1]);
+                        const p2Addr = getAddrForPeer(networkPlayers[2]);
+                        if (p1Addr) tournamentPlayerAddrLock.set(p1Addr, networkPlayers[1]);
+                        if (p2Addr) tournamentPlayerAddrLock.set(p2Addr, networkPlayers[2]);
                     }
                     syncMyAssignedPlayer();
                 }

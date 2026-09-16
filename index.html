@@ -2022,17 +2022,18 @@
 
         function assignPveSeatsForNewGame(seatSeed = null) {
             const effectiveSeed = typeof seatSeed === 'string' && seatSeed ? seatSeed : null;
+            const humanName = cleanPlayerName(myName || 'Player');
             const seatPair = effectiveSeed
                 ? getTournamentSeatAssignment(['human', 'computer'], 0, effectiveSeed)
                 : ['human', 'computer'];
             pveComputerPlayer = seatPair[0] === 'computer' ? 1 : 2;
             if (pveComputerPlayer === 1) {
                 p1NameInput.value = 'Computer (Black)';
-                p2NameInput.value = 'Player 1 (White)';
+                p2NameInput.value = `${humanName} (White)`;
                 p1NameInput.disabled = true;
                 p2NameInput.disabled = false;
             } else {
-                p1NameInput.value = 'Player 1 (Black)';
+                p1NameInput.value = `${humanName} (Black)`;
                 p2NameInput.value = 'Computer (White)';
                 p1NameInput.disabled = false;
                 p2NameInput.disabled = true;
@@ -3317,12 +3318,26 @@
                     }
                 }
 
-                if (!networkPlayers[payload.player] && senderPeerId) {
-                    networkPlayers[payload.player] = senderPeerId;
-                    syncMyAssignedPlayer();
-                    if (payload.player === 1) p1NameInput.value = senderName + " (Black)";
-                    if (payload.player === 2) p2NameInput.value = senderName + " (White)";
-                    maybeAnnounceGameStart('remote-move-claim');
+                if (senderPeerId) {
+                    const otherSlot = payload.player === 1 ? 2 : 1;
+                    const senderAlreadyOwnsOtherSlot = networkPlayers[otherSlot] === senderPeerId;
+                    if (senderAlreadyOwnsOtherSlot) {
+                        debugLog('MOVE_IGNORED', {
+                            reason: 'remote-sender-already-assigned-other-seat',
+                            senderPeerId,
+                            payloadPlayer: payload.player,
+                            otherSlot,
+                            networkPlayers
+                        });
+                        return;
+                    }
+                    if (!networkPlayers[payload.player]) {
+                        networkPlayers[payload.player] = senderPeerId;
+                        syncMyAssignedPlayer();
+                        if (payload.player === 1) p1NameInput.value = senderName + " (Black)";
+                        if (payload.player === 2) p2NameInput.value = senderName + " (White)";
+                        maybeAnnounceGameStart('remote-move-claim');
+                    }
                 }
 
                 if (board[payload.r][payload.c] === payload.player) return;
@@ -3330,8 +3345,7 @@
                 currentPlayer = payload.player;
                 syncMyAssignedPlayer();
                 applyPieceLocally(payload.r, payload.c, payload.player);
-            } else if (payload.action === 'WITHDRAWAL') {
-                // Resolve canonical IDs — quitter/winner may be stored under old canonical IDs
+            } else if (payload.action === 'WITHDRAWAL') {                // Resolve canonical IDs — quitter/winner may be stored under old canonical IDs
                 const withdrawalAddr = normalizeAddr(payload.addr || senderAddr);
                 const canonicalQuitter = getCanonicalPeerId(payload.quitterPeerId, withdrawalAddr) || payload.quitterPeerId;
                 const canonicalWinner = getCanonicalPeerId(payload.winnerPeerId, null) || payload.winnerPeerId;
@@ -3439,7 +3453,7 @@
             if (gameModeSelect.value === 'pve') {
                 const humanPlayer = pveComputerPlayer === 1 ? 2 : 1;
                 const computerPlayer = pveComputerPlayer;
-                const humanName = cleanPlayerName(humanPlayer === 1 ? p1NameInput.value : p2NameInput.value) || 'Player';
+                const humanName = cleanPlayerName(myName || (humanPlayer === 1 ? p1NameInput.value : p2NameInput.value)) || 'Player';
                 const computerName = cleanPlayerName(computerPlayer === 1 ? p1NameInput.value : p2NameInput.value) || 'Computer';
                 rows = [
                     { name: humanName, score: scores[humanPlayer] || 0 },
@@ -3887,13 +3901,26 @@
             }
             const isTournamentMode = gameModeSelect.value === 'webxdc-tournament';
             const allowTournamentPrune = isTournamentMode && tournamentState.finished;
+            const matchParticipants = new Set([networkPlayers[1], networkPlayers[2]].filter(Boolean));
             const missingPeers = (isTournamentMode && !allowTournamentPrune)
                 ? []
                 : Object.keys(connectedPlayers).filter((peerId) => {
                     if (!peerId || peerId === myPeerId) return false;
                     return !incomingPeerIds.has(peerId) && !knownLeftPeers.has(peerId);
                 });
+            const shouldGuardForActiveMatch = gameModeSelect.value === 'webxdc' && matchParticipants.size < 2;
+            if (shouldGuardForActiveMatch) {
+                debugLog('PEER_LIST_SYNC_PRUNE_SKIPPED', {
+                    reason: 'network-match-not-ready',
+                    currentPlayer,
+                    networkPlayers,
+                    missingPeers: missingPeers.slice(0, 10)
+                });
+            }
             for (const missingPeerId of missingPeers) {
+                if (shouldGuardForActiveMatch && !matchParticipants.has(missingPeerId)) {
+                    continue;
+                }
                 const missingPeerName = displayNameForPeer(missingPeerId);
                 const missingPeerAddr = connectedPlayers[missingPeerId]?.addr || null;
                 if (missingPeerAddr) {
@@ -4741,9 +4768,13 @@
                 return;
             }
             if (e.target.value === 'pve') {
-                p2NameInput.value = "Computer (White)";
-                p1NameInput.value = "Player 1 (Black)";
-                p2NameInput.disabled = true; p1NameInput.disabled = false;
+                const humanName = cleanPlayerName(myName || 'Player');
+                pveComputerPlayer = 2;
+                p1NameInput.value = `${humanName} (Black)`;
+                p2NameInput.value = 'Computer (White)';
+                p1NameInput.disabled = false;
+                p2NameInput.disabled = true;
+                assignPveSeatsForNewGame();
             } else if (e.target.value === 'webxdc') {
                 tournamentState.enabled = false;
                 tournamentState.finished = false;
@@ -4972,8 +5003,20 @@
                     debugLog('MOVE_BLOCKED', { reason: 'tournament-waiting-for-pairing', myPeerId, p1Owner, p2Owner });
                     return;
                 }
+                if (gameModeSelect.value === 'webxdc' && !bothPlayersAssigned) {
+                    alert('Waiting for the second player to join the match.');
+                    debugLog('MOVE_BLOCKED', {
+                        reason: 'webxdc-waiting-for-second-player',
+                        myPeerId,
+                        p1Owner,
+                        p2Owner
+                    });
+                    return;
+                }
                 if (gameModeSelect.value === 'webxdc' && iAmSpectator) {
-                    alert("Game already in progress between Player 1 and Player 2. You joined as a spectator.");
+                    const currentP1Name = p1Owner ? displayNameForPeer(p1Owner) : 'Player 1';
+                    const currentP2Name = p2Owner ? displayNameForPeer(p2Owner) : 'Player 2';
+                    alert(`Game already in progress between ${currentP1Name} and ${currentP2Name}. You joined as a spectator.`);
                     debugLog('MOVE_BLOCKED', {
                         reason: 'spectator-joined-active-game',
                         myPeerId,
@@ -5017,6 +5060,18 @@
                         reason: 'opponent-slot-not-claimed-yet',
                         myAssignedPlayer,
                         attemptedPlayer: playedAs,
+                        networkPlayers
+                    });
+                    return;
+                }
+
+                const otherSeat = playedAs === 1 ? 2 : 1;
+                if (networkPlayers[otherSeat] === myPeerId) {
+                    alert('You are already assigned to the other side of this match.');
+                    debugLog('MOVE_BLOCKED', {
+                        reason: 'same-peer-claimed-other-seat',
+                        playedAs,
+                        otherSeat,
                         networkPlayers
                     });
                     return;
@@ -6028,13 +6083,14 @@
                 });
             }
         }, 30000);
-        gameModeSelect.value = 'pve';
-        if (gameModeSelect.value === 'webxdc') {
+        const initialMode = gameModeSelect.value || 'pve';
+        gameModeSelect.value = initialMode;
+        if (initialMode === 'webxdc') {
             p1NameInput.value = "Waiting for P1 (Black)";
             p2NameInput.value = "Waiting for P2 (White)";
             p1NameInput.disabled = true; p2NameInput.disabled = true;
             announcePresence();
-        } else if (gameModeSelect.value === 'webxdc-tournament') {
+        } else if (initialMode === 'webxdc-tournament') {
             p1NameInput.value = "Waiting for P1 (Black)";
             p2NameInput.value = "Waiting for P2 (White)";
             p1NameInput.disabled = true; p2NameInput.disabled = true;

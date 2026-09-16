@@ -2963,14 +2963,16 @@
                         applyPeerLeft(activePeerId, 'local-detection', `leave:${activePeerId}:${Date.now()}`, `${leaverName} left the game.`);
                         applyWithdrawalResult(activePeerId, localWinnerPeerId, 'local-detection');
                         sendXdcUpdate({
-                            action: 'WITHDRAWAL',
-                            quitterPeerId: activePeerId,
+                            action: 'LEAVE',
+                            leftPeerId: activePeerId,
                             winnerPeerId: localWinnerPeerId,
+                            isWithdrawal: true,
+                            noteText: `${leaverName} left the game.`,
                             addr: myAddr,
                             name: myName,
                             peerId: myPeerId
-                        }, `${leaverName} left the game.`, 'Withdrawal detected');
-                        broadcastStateSync('withdrawal');
+                        }, `${leaverName} left the game.`, 'Player left');
+                        broadcastStateSync('leave');
                         return;
                     }
                 }
@@ -3005,14 +3007,16 @@
                         if (winnerPeerId) {
                             applyWithdrawalResult(stalePeer, winnerPeerId, 'local-detection');
                             sendXdcUpdate({
-                                action: 'WITHDRAWAL',
-                                quitterPeerId: stalePeer,
+                                action: 'LEAVE',
+                                leftPeerId: stalePeer,
                                 winnerPeerId,
+                                isWithdrawal: true,
+                                noteText: `${displayNameForPeer(stalePeer)} left the game.`,
                                 addr: myAddr,
                                 name: myName,
                                 peerId: myPeerId
-                            }, `${displayNameForPeer(stalePeer)} withdrew.`, 'Withdrawal detected');
-                            broadcastStateSync('withdrawal');
+                            }, `${displayNameForPeer(stalePeer)} left the game.`, 'Player left');
+                            broadcastStateSync('leave');
                         }
                     }
                 }
@@ -3033,27 +3037,24 @@
                 leftPeerId: myPeerId,
                 leaveEventId,
                 noteText,
+                winnerPeerId: (() => {
+                    const p1Owner = networkPlayers[1];
+                    const p2Owner = networkPlayers[2];
+                    if (!gameOver && p1Owner && p2Owner && countMoves(board) > 0 && (peerRepresentsLocalPlayer(p1Owner) || peerRepresentsLocalPlayer(p2Owner))) {
+                        return peerRepresentsLocalPlayer(p1Owner) ? p2Owner : p1Owner;
+                    }
+                    return null;
+                })(),
+                isWithdrawal: (() => {
+                    const p1Owner = networkPlayers[1];
+                    const p2Owner = networkPlayers[2];
+                    return !gameOver && !!p1Owner && !!p2Owner && countMoves(board) > 0 && (peerRepresentsLocalPlayer(p1Owner) || peerRepresentsLocalPlayer(p2Owner));
+                })(),
                 addr: myAddr,
                 name: myName,
                 peerId: myPeerId
             }, noteText, 'Player left');
             sendPeerListSync('local-leave');
-
-            const p1Owner = networkPlayers[1];
-            const p2Owner = networkPlayers[2];
-            if (!gameOver && p1Owner && p2Owner && countMoves(board) > 0 && (peerRepresentsLocalPlayer(p1Owner) || peerRepresentsLocalPlayer(p2Owner))) {
-                const winnerPeerId = peerRepresentsLocalPlayer(p1Owner) ? p2Owner : p1Owner;
-                if (winnerPeerId) {
-                    sendXdcUpdate({
-                        action: 'WITHDRAWAL',
-                        quitterPeerId: myPeerId,
-                        winnerPeerId,
-                        addr: myAddr,
-                        name: myName,
-                        peerId: myPeerId
-                    }, `${leaverName} withdrew.`, 'Withdrawal');
-                }
-            }
 
             debugLog('LOCAL_LEAVE_BROADCAST', { reason, leaveEventId });
         }
@@ -3265,7 +3266,27 @@
                 // be stored under an OLD canonical ID (from a previous session). Resolve to
                 // canonical so connectedPlayers / networkPlayers are actually cleared.
                 const leaveAddr = normalizeAddr(payload.addr || senderAddr);
-                const canonicalLeftPeerId = getCanonicalPeerId(payload.leftPeerId, leaveAddr) || payload.leftPeerId;
+                const canonicalLeftPeerId = getCanonicalPeerId(payload.leftPeerId || payload.quitterPeerId || senderPeerId, leaveAddr)
+                    || (typeof payload.leftPeerId === 'string' ? payload.leftPeerId : null)
+                    || senderPeerId;
+                const leaveWinnerPeerId = typeof payload.winnerPeerId === 'string' ? payload.winnerPeerId : null;
+                const leavingPeerIsCurrentGameParticipant = !!canonicalLeftPeerId && [networkPlayers[1], networkPlayers[2]].some((peerId) => {
+                    if (!peerId) return false;
+                    return getCanonicalPeerId(peerId, connectedPlayers[peerId]?.addr || null) === canonicalLeftPeerId;
+                });
+                const shouldHandleAsWithdrawal = !!canonicalLeftPeerId && (gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament')
+                    && leavingPeerIsCurrentGameParticipant
+                    && !gameOver;
+                if (shouldHandleAsWithdrawal) {
+                    const winnerPeerId = leaveWinnerPeerId || [networkPlayers[1], networkPlayers[2]].find((peerId) => {
+                        if (!peerId || getCanonicalPeerId(peerId, connectedPlayers[peerId]?.addr || null) === canonicalLeftPeerId) return false;
+                        return true;
+                    }) || null;
+                    if (winnerPeerId) {
+                        applyWithdrawalResult(canonicalLeftPeerId, winnerPeerId, 'remote-update');
+                        return;
+                    }
+                }
                 applyPeerLeft(canonicalLeftPeerId, 'remote-update', payload.leaveEventId, payload.noteText);
                 return;
             }
@@ -3364,11 +3385,23 @@
                 currentPlayer = payload.player;
                 syncMyAssignedPlayer();
                 applyPieceLocally(payload.r, payload.c, payload.player);
-            } else if (payload.action === 'WITHDRAWAL') {                // Resolve canonical IDs — quitter/winner may be stored under old canonical IDs
+            } else if (payload.action === 'WITHDRAWAL') {
+                // Legacy compatibility: old clients still send WITHDRAWAL. Treat it as a LEAVE
+                // that is only active when the peer was participating in the current game.
                 const withdrawalAddr = normalizeAddr(payload.addr || senderAddr);
-                const canonicalQuitter = getCanonicalPeerId(payload.quitterPeerId, withdrawalAddr) || payload.quitterPeerId;
-                const canonicalWinner = getCanonicalPeerId(payload.winnerPeerId, null) || payload.winnerPeerId;
-                applyWithdrawalResult(canonicalQuitter, canonicalWinner, 'remote-update');
+                const canonicalQuitter = getCanonicalPeerId(payload.quitterPeerId || payload.leftPeerId || senderPeerId, withdrawalAddr)
+                    || (typeof payload.quitterPeerId === 'string' ? payload.quitterPeerId : null)
+                    || senderPeerId;
+                const canonicalWinner = getCanonicalPeerId(payload.winnerPeerId || payload.leftPeerId || null, null) || payload.winnerPeerId || null;
+                const leavingPeerIsCurrentGameParticipant = !!canonicalQuitter && [networkPlayers[1], networkPlayers[2]].some((peerId) => {
+                    if (!peerId) return false;
+                    return getCanonicalPeerId(peerId, connectedPlayers[peerId]?.addr || null) === canonicalQuitter;
+                });
+                if (canonicalWinner && leavingPeerIsCurrentGameParticipant && !gameOver) {
+                    applyWithdrawalResult(canonicalQuitter, canonicalWinner, 'remote-update');
+                    return;
+                }
+                applyPeerLeft(canonicalQuitter, 'remote-update', payload.leaveEventId || `leave:${canonicalQuitter}:${Date.now()}`, payload.noteText || `${displayNameForPeer(canonicalQuitter)} left the game.`);
             } else if (payload.action === 'TIMEOUT') {
                 applyMoveTimeoutResult({
                     loserPlayer: payload.loserPlayer === 2 ? 2 : 1,

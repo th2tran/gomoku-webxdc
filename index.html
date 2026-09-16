@@ -2803,11 +2803,6 @@
             const peerIdsToRemove = new Set([peerId, canonicalPeerId].filter(Boolean));
             if (leaverAddr) {
                 const normAddr = normalizeAddr(leaverAddr);
-                for (const [candidatePeerId, record] of Object.entries(connectedPlayers)) {
-                    if (candidatePeerId && candidatePeerId !== myPeerId && record && normalizeAddr(record.addr) === normAddr) {
-                        peerIdsToRemove.add(candidatePeerId);
-                    }
-                }
                 if (normAddr) {
                     canonicalPeerIdByAddr.delete(normAddr);
                     recentJoinAtByIdentity.delete(normAddr);
@@ -2817,6 +2812,7 @@
             selfAliases.delete(peerId);
             selfAliases.delete(canonicalPeerId);
             for (const candidatePeerId of Array.from(peerIdsToRemove)) {
+                if (!candidatePeerId || candidatePeerId === myPeerId) continue;
                 delete connectedPlayers[candidatePeerId];
                 delete playerScoresByPeer[candidatePeerId];
                 joinNotificationKeys.delete(`peer:${candidatePeerId}`);
@@ -3960,6 +3956,12 @@
             const isTournamentMode = gameModeSelect.value === 'webxdc-tournament';
             const allowTournamentPrune = isTournamentMode && tournamentState.finished;
             const matchParticipants = new Set([networkPlayers[1], networkPlayers[2]].filter(Boolean));
+            const currentLivePeers = Object.keys(connectedPlayers).filter((peerId) => {
+                if (!peerId || peerId === myPeerId || knownLeftPeers.has(peerId)) return false;
+                return true;
+            });
+            const incomingLivePeerCount = incomingPeerIds.size;
+            const hasPartialRoster = currentLivePeers.length > 1 && incomingLivePeerCount > 0 && incomingLivePeerCount < currentLivePeers.length;
             const missingPeers = (isTournamentMode && !allowTournamentPrune)
                 ? []
                 : Object.keys(connectedPlayers).filter((peerId) => {
@@ -3967,15 +3969,21 @@
                     return !incomingPeerIds.has(peerId) && !knownLeftPeers.has(peerId);
                 });
             const shouldGuardForActiveMatch = gameModeSelect.value === 'webxdc' && matchParticipants.size < 2;
-            if (shouldGuardForActiveMatch) {
+            const shouldSuppressPrune = isTournamentMode || hasPartialRoster || shouldGuardForActiveMatch;
+            if (shouldSuppressPrune) {
                 debugLog('PEER_LIST_SYNC_PRUNE_SKIPPED', {
-                    reason: 'network-match-not-ready',
+                    reason: isTournamentMode ? 'tournament-mode' : hasPartialRoster ? 'partial-roster' : 'network-match-not-ready',
                     currentPlayer,
                     networkPlayers,
+                    currentLivePeers: currentLivePeers.length,
+                    incomingLivePeerCount,
                     missingPeers: missingPeers.slice(0, 10)
                 });
             }
             for (const missingPeerId of missingPeers) {
+                if (shouldSuppressPrune) {
+                    continue;
+                }
                 if (shouldGuardForActiveMatch && !matchParticipants.has(missingPeerId)) {
                     continue;
                 }

@@ -1763,6 +1763,8 @@
 
         function startPresenceSync() {
             if (presenceSyncTimer || !window.webxdc) return;
+            if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
+            announcePresence('PRESENCE');
             presenceSyncTimer = setInterval(() => {
                 if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
                 announcePresence('PRESENCE');
@@ -2806,7 +2808,11 @@
                         peerIdsToRemove.add(candidatePeerId);
                     }
                 }
-                canonicalPeerIdByAddr.delete(normAddr);
+                if (normAddr) {
+                    canonicalPeerIdByAddr.delete(normAddr);
+                    recentJoinAtByIdentity.delete(normAddr);
+                    joinNotificationKeys.delete(`addr:${normAddr}`);
+                }
             }
             selfAliases.delete(peerId);
             selfAliases.delete(canonicalPeerId);
@@ -2816,10 +2822,23 @@
                 joinNotificationKeys.delete(`peer:${candidatePeerId}`);
                 if (leaverAddr) joinNotificationKeys.delete(`addr:${normalizeAddr(leaverAddr)}`);
             }
-            // Capture before clearing slots — needed to decide whether to advance the match
+            // In an active tournament, keep the match slot assigned until stale-detection
+            // decides the peer is truly gone. This allows a quick leave/rejoin to resume the
+            // same in-progress match instead of re-pairing the tournament for everyone.
+            const tournamentMatchActive = gameModeSelect.value === 'webxdc-tournament'
+                && tournamentState.enabled
+                && !tournamentState.finished
+                && !gameOver
+                && (!!networkPlayers[1] || !!networkPlayers[2]);
             const wasActivePlayer = networkPlayers[1] === peerId || networkPlayers[2] === peerId;
-            if (networkPlayers[1] === peerId) networkPlayers[1] = null;
-            if (networkPlayers[2] === peerId) networkPlayers[2] = null;
+            const wasActiveByAddr = !!leaverAddr && (
+                (!!networkPlayers[1] && normalizeAddr(getAddrForPeer(networkPlayers[1])) === normalizeAddr(leaverAddr))
+                || (!!networkPlayers[2] && normalizeAddr(getAddrForPeer(networkPlayers[2])) === normalizeAddr(leaverAddr))
+            );
+            if (!(tournamentMatchActive && (wasActivePlayer || wasActiveByAddr))) {
+                if (networkPlayers[1] === peerId) networkPlayers[1] = null;
+                if (networkPlayers[2] === peerId) networkPlayers[2] = null;
+            }
             syncMyAssignedPlayer();
             updateConnectionIndicator();
             updateConnectedPeersPanel();
@@ -3003,7 +3022,6 @@
         function broadcastLocalLeave(reason = 'window-close') {
             if (localLeaveBroadcastSent) return;
             if (!window.webxdc) return;
-            if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
 
             localLeaveBroadcastSent = true;
             const leaveEventId = `leave:${myPeerId}:${Date.now()}`;
@@ -3019,6 +3037,7 @@
                 name: myName,
                 peerId: myPeerId
             }, noteText, 'Player left');
+            sendPeerListSync('local-leave');
 
             const p1Owner = networkPlayers[1];
             const p2Owner = networkPlayers[2];
@@ -3542,6 +3561,8 @@
                 if (staleScore > 0) {
                     playerScoresByPeer[canonicalPeerId] = (playerScoresByPeer[canonicalPeerId] || 0) + staleScore;
                 }
+                if (networkPlayers[1] === sameAddrPeer) networkPlayers[1] = canonicalPeerId;
+                if (networkPlayers[2] === sameAddrPeer) networkPlayers[2] = canonicalPeerId;
                 delete playerScoresByPeer[sameAddrPeer];
                 delete connectedPlayers[sameAddrPeer];
             }
@@ -3550,6 +3571,8 @@
                 if (staleScore > 0) {
                     playerScoresByPeer[canonicalPeerId] = (playerScoresByPeer[canonicalPeerId] || 0) + staleScore;
                 }
+                if (networkPlayers[1] === peerId) networkPlayers[1] = canonicalPeerId;
+                if (networkPlayers[2] === peerId) networkPlayers[2] = canonicalPeerId;
                 delete playerScoresByPeer[peerId];
                 if (connectedPlayers[peerId]) {
                     delete connectedPlayers[peerId];
@@ -3882,6 +3905,8 @@
                     if (oldScore > 0 || newScore > 0) {
                         playerScoresByPeer[newPeerId] = Math.max(newScore, oldScore);
                     }
+                    if (networkPlayers[1] === oldPeerId) networkPlayers[1] = newPeerId;
+                    if (networkPlayers[2] === oldPeerId) networkPlayers[2] = newPeerId;
                     delete playerScoresByPeer[oldPeerId];
                     delete connectedPlayers[oldPeerId];
                     joinNotificationKeys.delete(`peer:${oldPeerId}`);
@@ -6057,7 +6082,7 @@
                 // the app was backgrounded-then-killed (common on mobile where pagehide /
                 // beforeunload never fire). Sending LEAVE now lets peers know quickly
                 // instead of waiting for stale detection (~15-20 s).
-                if (gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament') {
+                if (window.webxdc) {
                     clearTimeout(hiddenLeaveTimer);
                     hiddenLeaveTimer = setTimeout(() => {
                         broadcastLocalLeave('visibility-hidden-timeout');

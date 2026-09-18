@@ -216,45 +216,44 @@ function findImmediateBlock(board, player) {
     return null;
 }
 
-function countOpenThreeThreats(board, player) {
-    const directions = [[0, 1], [1, 0], [1, 1], [1, -1]];
-    const patterns = [
-        [EMPTY, player, player, player, EMPTY],
-        [EMPTY, player, player, EMPTY, player, EMPTY],
-        [EMPTY, player, EMPTY, player, player, EMPTY],
-        [EMPTY, EMPTY, player, player, player, EMPTY]
-    ];
-    let count = 0;
+function scoreLocalThreatMove(board, r, c, player) {
+    if (board[r]?.[c] !== EMPTY) return Number.NEGATIVE_INFINITY;
+    const opponent = player === BLACK ? WHITE : BLACK;
+    let score = 0;
+    const centerBias = 12 - (Math.abs(r - CENTER) + Math.abs(c - CENTER));
+    score += Math.max(0, centerBias) * 8;
 
-    for (let r = 0; r < SIZE; r++) {
-        for (let c = 0; c < SIZE; c++) {
-            for (const [dr, dc] of directions) {
-                for (const pattern of patterns) {
-                    let valid = true;
-                    for (let i = 0; i < pattern.length; i++) {
-                        const rr = r + dr * i;
-                        const cc = c + dc * i;
-                        if (!inBounds(rr, cc)) {
-                            valid = false;
-                            break;
-                        }
-                        const value = board[rr][cc];
-                        const expected = pattern[i];
-                        if (expected === EMPTY && value !== EMPTY) {
-                            valid = false;
-                            break;
-                        }
-                        if (expected === player && value !== player) {
-                            valid = false;
-                            break;
-                        }
-                    }
-                    if (valid) count++;
+    for (const [dr, dc] of DIRECTIONS) {
+        for (let offset = -2; offset <= 2; offset++) {
+            const line = [];
+            for (let step = 0; step < 5; step++) {
+                const rr = r + dr * (offset + step);
+                const cc = c + dc * (offset + step);
+                if (!inBounds(rr, cc)) {
+                    line.push(EMPTY);
+                    continue;
                 }
+                line.push(board[rr][cc]);
             }
+            score += scoreWindow(line, player);
+            score += scoreWindow(line, opponent) * 0.6;
         }
     }
-    return count;
+
+    return score;
+}
+
+function enumerateImmediateWinningMoves(board, player) {
+    const moves = [];
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            if (board[r][c] !== EMPTY) continue;
+            const test = cloneBoard(board);
+            test[r][c] = player;
+            if (isWinAfterMove(test, r, c, player)) moves.push({ r, c });
+        }
+    }
+    return moves;
 }
 
 function uniqueMoves(moves) {
@@ -278,6 +277,198 @@ function countImmediateWins(board, player) {
         }
     }
     return total;
+}
+
+function extractDirectionalSegment(board, row, col, dr, dc, radius = 4) {
+    const cells = [];
+    let centerIndex = 0;
+    for (let step = -radius; step <= radius; step++) {
+        if (step === 0) centerIndex = cells.length;
+        const rr = row + dr * step;
+        const cc = col + dc * step;
+        cells.push(inBounds(rr, cc) ? board[rr][cc] : null);
+    }
+    return { cells, centerIndex };
+}
+
+function classifyThreatAtMove(board, r, c, player) {
+    if (board[r]?.[c] !== EMPTY) return { severity: 0, type: null };
+    const test = cloneBoard(board);
+    test[r][c] = player;
+    let bestThreat = { severity: 0, type: null };
+
+    for (const [dr, dc] of DIRECTIONS) {
+        const segment = extractDirectionalSegment(test, r, c, dr, dc, 4);
+
+        for (let start = 0; start <= segment.cells.length - 5; start++) {
+            const end = start + 5;
+            if (segment.centerIndex < start || segment.centerIndex >= end) continue;
+            const window = segment.cells.slice(start, end);
+            if (window.includes(null)) continue;
+            if (window.some((value) => value !== EMPTY && value !== player)) continue;
+
+            const stones = window.filter((value) => value === player).length;
+            const empties = window.filter((value) => value === EMPTY).length;
+            if (stones === 5) bestThreat = { severity: 5, type: 'five' };
+            else if (stones === 4 && empties === 1 && bestThreat.severity < 4) bestThreat = { severity: 4, type: 'simple-four' };
+            else if (stones === 3 && empties === 2) {
+                const firstEmpty = window.indexOf(EMPTY);
+                const lastEmpty = window.lastIndexOf(EMPTY);
+                const nextThreat = lastEmpty - firstEmpty === 4
+                    ? { severity: 3, type: 'open-three' }
+                    : { severity: 2, type: 'broken-three' };
+                if (nextThreat.severity > bestThreat.severity) bestThreat = nextThreat;
+            }
+        }
+
+        for (let start = 0; start <= segment.cells.length - 6; start++) {
+            const end = start + 6;
+            if (segment.centerIndex < start || segment.centerIndex >= end) continue;
+            const window = segment.cells.slice(start, end);
+            if (window.includes(null)) continue;
+            if (window.some((value) => value !== EMPTY && value !== player)) continue;
+
+            const stones = window.filter((value) => value === player).length;
+            const empties = [];
+            for (let i = 0; i < window.length; i++) {
+                if (window[i] === EMPTY) empties.push(i);
+            }
+
+            if (stones === 4 && empties.length === 2 && empties[0] === 0 && empties[1] === 5 && bestThreat.severity < 5) {
+                bestThreat = { severity: 5, type: 'open-four' };
+            } else if (stones === 3 && empties.length === 3) {
+                const inner = window.slice(1, 5);
+                const innerStones = inner.filter((value) => value === player).length;
+                const innerEmpties = inner.filter((value) => value === EMPTY).length;
+                if (window[0] === EMPTY && window[5] === EMPTY && innerStones === 3 && innerEmpties === 1 && bestThreat.severity < 3) {
+                    bestThreat = { severity: 3, type: 'open-three' };
+                } else if (innerStones === 3 && innerEmpties === 1 && bestThreat.severity < 2) {
+                    bestThreat = { severity: 2, type: 'broken-three' };
+                }
+            }
+        }
+    }
+
+    return bestThreat;
+}
+
+function getThreatSpaceCandidateMoves(board, player, limit = 16) {
+    const moves = getCandidateMoves(board, player, Math.max(limit * 2, 16));
+    const ranked = moves.map((move) => {
+        const threat = classifyThreatAtMove(board, move.r, move.c, player);
+        return {
+            ...move,
+            score: scoreLocalThreatMove(board, move.r, move.c, player) + threat.severity * 10000
+        };
+    });
+    ranked.sort((a, b) => b.score - a.score);
+    return ranked.slice(0, limit).map(({ r, c }) => ({ r, c }));
+}
+
+function getForcingThreatType(board, r, c, player) {
+    const threat = classifyThreatAtMove(board, r, c, player);
+    if (threat.type === 'five') return 'win';
+    return threat.type;
+}
+
+function enumerateForcingMoves(board, player, limit = 16) {
+    const forcingMoves = [];
+    for (const move of getThreatSpaceCandidateMoves(board, player, limit)) {
+        const threatType = getForcingThreatType(board, move.r, move.c, player);
+        if (!threatType || threatType === 'broken-three') continue;
+        forcingMoves.push({ r: move.r, c: move.c, threatType });
+    }
+    return forcingMoves;
+}
+
+function countOpenThreeThreats(board, player) {
+    let total = 0;
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            if (board[r][c] !== EMPTY) continue;
+            if (classifyThreatAtMove(board, r, c, player).type === 'open-three') total++;
+        }
+    }
+    return total;
+}
+
+function findThreatBlockingMoves(board, player, threatTypes) {
+    const opponent = player === BLACK ? WHITE : BLACK;
+    const currentThreats = [];
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            if (board[r][c] !== EMPTY) continue;
+            const threat = classifyThreatAtMove(board, r, c, opponent);
+            if (threatTypes.includes(threat.type)) {
+                currentThreats.push({ r, c, severity: threat.severity });
+            }
+        }
+    }
+    if (!currentThreats.length) return [];
+
+    const currentSeverity = currentThreats.reduce((sum, threat) => sum + threat.severity, 0);
+    const blocks = [];
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            if (board[r][c] !== EMPTY) continue;
+            const test = cloneBoard(board);
+            test[r][c] = player;
+            let remainingSeverity = 0;
+            for (const threat of currentThreats) {
+                remainingSeverity += classifyThreatAtMove(test, threat.r, threat.c, opponent).severity;
+            }
+            if (remainingSeverity < currentSeverity) {
+                blocks.push({ r, c, savedSeverity: currentSeverity - remainingSeverity });
+            }
+        }
+    }
+
+    return uniqueMoves(blocks).sort((a, b) => b.savedSeverity - a.savedSeverity || scoreMove(board, b.r, b.c, player) - scoreMove(board, a.r, a.c, player));
+}
+
+function findUrgentLiveThreeBlock(board, player) {
+    const blocks = findThreatBlockingMoves(board, player, ['open-three', 'simple-four', 'open-four']);
+    return blocks.length ? { r: blocks[0].r, c: blocks[0].c } : null;
+}
+
+function findLiveThreeBlockingMoves(board, player) {
+    return findThreatBlockingMoves(board, player, ['open-three']);
+}
+
+function runThreatSpaceSearch(board, attacker, defender, depth = 3) {
+    if (depth <= 0) return null;
+    const forcingMoves = enumerateForcingMoves(board, attacker, 12);
+    if (!forcingMoves.length) return null;
+
+    for (const move of forcingMoves) {
+        const attackBoard = cloneBoard(board);
+        attackBoard[move.r][move.c] = attacker;
+        if (move.threatType === 'win' || move.threatType === 'open-four' || isWinAfterMove(attackBoard, move.r, move.c, attacker)) {
+            return { move: { r: move.r, c: move.c }, threatType: move.threatType };
+        }
+
+        const defensiveReplies = findThreatBlockingMoves(attackBoard, defender, [move.threatType]).map((reply) => ({ r: reply.r, c: reply.c }));
+        if (!defensiveReplies.length) {
+            return { move: { r: move.r, c: move.c }, threatType: move.threatType };
+        }
+
+        let fullyDefended = false;
+        for (const reply of defensiveReplies) {
+            const defenseBoard = cloneBoard(attackBoard);
+            defenseBoard[reply.r][reply.c] = defender;
+            const continuation = runThreatSpaceSearch(defenseBoard, attacker, defender, depth - 1);
+            if (!continuation) {
+                fullyDefended = true;
+                break;
+            }
+        }
+
+        if (!fullyDefended) {
+            return { move: { r: move.r, c: move.c }, threatType: move.threatType };
+        }
+    }
+
+    return null;
 }
 
 function createsDoubleThreat(board, r, c, player) {
@@ -417,6 +608,9 @@ function shouldRunCriticalDefense(board, player, moveCount) {
     const opponent = player === BLACK ? WHITE : BLACK;
     if (moveCount < 10) return false;
 
+    const opponentThreatSequence = runThreatSpaceSearch(board, opponent, player, 2);
+    if (opponentThreatSequence) return true;
+
     const opponentOpenThrees = countOpenThreeThreats(board, opponent);
     if (opponentOpenThrees >= 2) return true;
 
@@ -465,8 +659,43 @@ function chooseMove(board, payload) {
     const forcedBlock = findImmediateBlock(boardCopy, aiPlayer);
     if (forcedBlock) return forcedBlock;
 
+    const urgentLiveThreeBlock = findUrgentLiveThreeBlock(boardCopy, aiPlayer);
+    if (urgentLiveThreeBlock) return urgentLiveThreeBlock;
+
+    if (payload.isHard) {
+        const attackSequence = runThreatSpaceSearch(boardCopy, aiPlayer, humanPlayer, 3);
+        if (attackSequence) return attackSequence.move;
+
+        const defenseSequence = runThreatSpaceSearch(boardCopy, humanPlayer, aiPlayer, 2);
+        if (defenseSequence) {
+            const forcingReplies = enumerateImmediateWinningMoves(boardCopy, humanPlayer);
+            const candidateBlocks = forcingReplies.length
+                ? forcingReplies
+                : getThreatSpaceCandidateMoves(boardCopy, aiPlayer, 12);
+            let bestBlock = null;
+            let bestBlockScore = Number.NEGATIVE_INFINITY;
+            for (const move of candidateBlocks) {
+                if (boardCopy[move.r]?.[move.c] !== EMPTY) continue;
+                const test = cloneBoard(boardCopy);
+                test[move.r][move.c] = aiPlayer;
+                if (runThreatSpaceSearch(test, humanPlayer, aiPlayer, 2)) continue;
+                const score = scoreMove(boardCopy, move.r, move.c, aiPlayer);
+                if (score > bestBlockScore) {
+                    bestBlockScore = score;
+                    bestBlock = move;
+                }
+            }
+            if (bestBlock) return bestBlock;
+        }
+    }
+
     const forcingAttack = findDoubleThreatMove(boardCopy, aiPlayer);
     if (forcingAttack) return forcingAttack;
+
+    const liveThreeBlocks = findLiveThreeBlockingMoves(boardCopy, aiPlayer);
+    if (liveThreeBlocks.length) {
+        return liveThreeBlocks[0];
+    }
 
     if (shouldRunCriticalDefense(boardCopy, aiPlayer, moveCount)) {
         const criticalDefense = findCriticalDefensiveMove(boardCopy, aiPlayer);

@@ -45,6 +45,10 @@ function countMoves(boardState) {
     return count;
 }
 
+function inBounds(r, c) {
+    return r >= 0 && r < SIZE && c >= 0 && c < SIZE;
+}
+
 function setVision(boardState) {
     const vision = Array.from({ length: SIZE }, () => Array(SIZE).fill(false));
     for (let i = 0; i < SIZE; i++) {

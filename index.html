@@ -2052,9 +2052,9 @@
             const depth = getSelectedDifficultyDepth();
             const hard = depth >= 6;
             return {
-                depth: hard ? 8 : depth,
-                candidateLimit: hard ? 20 : depth >= 4 ? 14 : 10,
-                defenseDepth: hard ? 4 : 2,
+                depth: hard ? 5 : depth,
+                candidateLimit: hard ? 10 : depth >= 4 ? 14 : 10,
+                defenseDepth: hard ? 3 : 2,
                 useStrongHeuristics: hard,
                 isHard: hard
             };
@@ -2084,9 +2084,15 @@
         }
 
         function createComputerWorker() {
-            if (computerWorker) return computerWorker;
+            const workerPath = getSelectedDifficultyDepth() >= 6 ? 'sifu.js' : 'worker.js';
+            if (computerWorker && computerWorker.__enginePath === workerPath) return computerWorker;
+            if (computerWorker) {
+                computerWorker.terminate();
+                computerWorker = null;
+            }
 
-            const worker = new Worker('worker.js');
+            const worker = new Worker(workerPath);
+            worker.__enginePath = workerPath;
             let lastComputerRequestAt = 0;
             worker.onmessage = (event) => {
                 const payload = event.data || {};
@@ -2118,6 +2124,17 @@
                         move,
                         player: currentPlayer,
                         reason: 'invalid-state',
+                        elapsedMs
+                    });
+                    return;
+                }
+                if (!isOnBoard(move.r, move.c) || board[move.r][move.c] !== 0) {
+                    isComputerThinking = false;
+                    debugLog('COMPUTER_TURN_FINISHED', {
+                        token: activeToken,
+                        move,
+                        player: currentPlayer,
+                        reason: 'occupied-or-off-board',
                         elapsedMs
                     });
                     return;
@@ -2159,6 +2176,10 @@
             isComputerThinking = true;
             const delayMs = 200;
             const requestToken = ++computerMoveRequestToken;
+            const remainingThinkMs = Number.isFinite(playerRemainingMs[currentPlayer])
+                ? Math.max(0, playerRemainingMs[currentPlayer])
+                : moveTimeLimitMs;
+            const watchdogMs = remainingThinkMs;
             const searchPolicy = getComputerSearchPolicy();
             const boardPositions = {
                 black: [],
@@ -2182,7 +2203,8 @@
                 depth: searchPolicy.depth,
                 policy: searchPolicy,
                 moveCount: countMoves(board),
-                player: currentPlayer
+                player: currentPlayer,
+                remainingThinkMs: watchdogMs
             });
             setTimeout(() => {
                 if (isComputerThinking && requestToken === computerMoveRequestToken) {
@@ -2191,10 +2213,11 @@
                         token: requestToken,
                         move: null,
                         player: currentPlayer,
-                        reason: 'watchdog-timeout'
+                        reason: 'watchdog-timeout',
+                        remainingThinkMs: watchdogMs
                     });
                 }
-            }, 5000);
+            }, watchdogMs);
             setTimeout(() => {
                 if (gameOver || !isComputerPlayer(currentPlayer)) {
                     isComputerThinking = false;

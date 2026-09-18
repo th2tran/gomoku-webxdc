@@ -328,6 +328,16 @@ function lineMatches(boardState, row, col, dr, dc, pattern) {
     return pattern.every((cell, index) => line[index] === cell);
 }
 
+function uniqueMoves(moves) {
+    const seen = new Set();
+    return moves.filter((move) => {
+        const key = `${move.r},${move.c}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
 function findOpenThreeBlockingMoves(boardState, player) {
     const opponent = player === BLACK ? WHITE : BLACK;
     const blocks = new Map();
@@ -364,7 +374,11 @@ function findOpenThreeBlockingMoves(boardState, player) {
         }
     }
 
-    return Array.from(blocks.values());
+    return uniqueMoves(Array.from(blocks.values())).sort((a, b) => {
+        const aScore = scoreCandidateMove(cloneBoard(boardState), a, player);
+        const bScore = scoreCandidateMove(cloneBoard(boardState), b, player);
+        return bScore - aScore;
+    });
 }
 
 function findPotentialOpenThreeBlockingMoves(boardState, player) {
@@ -429,6 +443,16 @@ function scoreCandidateMove(boardState, move, color) {
     return score;
 }
 
+function getEmptyMoves(boardState) {
+    const moves = [];
+    for (let i = 0; i < SIZE; i++) {
+        for (let j = 0; j < SIZE; j++) {
+            if (boardState[i][j] === EMPTY) moves.push({ r: i, c: j });
+        }
+    }
+    return moves;
+}
+
 function getCandidateMoves(boardState, color = BLACK, limit = null) {
     const vision = setVision(boardState);
     const moves = [];
@@ -438,8 +462,9 @@ function getCandidateMoves(boardState, color = BLACK, limit = null) {
             moves.push({ r: i, c: j });
         }
     }
-    moves.sort((a, b) => scoreCandidateMove(boardState, b, color) - scoreCandidateMove(boardState, a, color));
-    return Number.isInteger(limit) && limit > 0 ? moves.slice(0, limit) : moves;
+    const legalMoves = moves.filter((move) => boardState[move.r]?.[move.c] === EMPTY);
+    legalMoves.sort((a, b) => scoreCandidateMove(boardState, b, color) - scoreCandidateMove(boardState, a, color));
+    return Number.isInteger(limit) && limit > 0 ? legalMoves.slice(0, limit) : legalMoves;
 }
 
 function getTacticalCandidateMoves(boardState, color, limit = 24) {
@@ -462,17 +487,11 @@ function getTacticalCandidateMoves(boardState, color, limit = 24) {
 }
 
 function getAllEmptyMoves(boardState) {
-    const moves = [];
-    for (let i = 0; i < SIZE; i++) {
-        for (let j = 0; j < SIZE; j++) {
-            if (boardState[i][j] === EMPTY) moves.push({ r: i, c: j });
-        }
-    }
-    return moves;
+    return getEmptyMoves(boardState);
 }
 
 function findImmediateWinningMoves(boardState, color) {
-    const moves = getCandidateMoves(boardState, color, 12);
+    const moves = getCandidateMoves(boardState, color, 12).filter((move) => boardState[move.r]?.[move.c] === EMPTY);
     const winningMoves = [];
     for (const move of moves) {
         boardState[move.r][move.c] = color;
@@ -485,7 +504,7 @@ function findImmediateWinningMoves(boardState, color) {
 }
 
 function hasImmediateWinningMove(boardState, color) {
-    const moves = getCandidateMoves(boardState, color, 12);
+    const moves = getCandidateMoves(boardState, color, 12).filter((move) => boardState[move.r]?.[move.c] === EMPTY);
     for (const move of moves) {
         boardState[move.r][move.c] = color;
         const isWinningMove = hasFive(boardState, color);
@@ -856,13 +875,23 @@ function findBestMove(inputBoard, aiPlayer, initialDepth = DEFAULT_DEPTH, option
             }
             const openThreeBlocks = findOpenThreeBlockingMoves(inputBoard, aiPlayer);
             if (openThreeBlocks.length) {
-                emitProgress('forced-open-three-block', { options: openThreeBlocks.length, move: openThreeBlocks[0] });
-                return openThreeBlocks[0];
+                const chosen = openThreeBlocks.reduce((best, move) => {
+                    const bestScore = scoreCandidateMove(cloneBoard(inputBoard), best, aiPlayer);
+                    const moveScore = scoreCandidateMove(cloneBoard(inputBoard), move, aiPlayer);
+                    return moveScore > bestScore ? move : best;
+                }, openThreeBlocks[0]);
+                emitProgress('forced-open-three-block', { options: openThreeBlocks.length, move: chosen });
+                return chosen;
             }
             const potentialBlocks = isHard ? findPotentialOpenThreeBlockingMoves(inputBoard, aiPlayer) : [];
             if (potentialBlocks.length) {
-                emitProgress('forced-potential-open-three-block', { options: potentialBlocks.length, move: potentialBlocks[0] });
-                return potentialBlocks[0];
+                const chosen = potentialBlocks.reduce((best, move) => {
+                    const bestScore = scoreCandidateMove(cloneBoard(inputBoard), best, aiPlayer);
+                    const moveScore = scoreCandidateMove(cloneBoard(inputBoard), move, aiPlayer);
+                    return moveScore > bestScore ? move : best;
+                }, potentialBlocks[0]);
+                emitProgress('forced-potential-open-three-block', { options: potentialBlocks.length, move: chosen });
+                return chosen;
             }
             if (isHard) {
                 const tacticalMoves = getTacticalCandidateMoves(inputBoard, aiPlayer, 24);
@@ -966,7 +995,17 @@ function findBestMove(inputBoard, aiPlayer, initialDepth = DEFAULT_DEPTH, option
             nextBoard[move.r][move.c] = aiPlayer;
             return countOpenThreeLines(nextBoard, aiPlayer === BLACK ? WHITE : BLACK) === 0;
         });
-        const chosenOpenThreeBlock = verifiedBlocks[0] || openThreeBlocks[0];
+        const chosenOpenThreeBlock = verifiedBlocks.length
+            ? verifiedBlocks.reduce((best, move) => {
+                const bestScore = scoreCandidateMove(cloneBoard(working), best, aiPlayer);
+                const moveScore = scoreCandidateMove(cloneBoard(working), move, aiPlayer);
+                return moveScore > bestScore ? move : best;
+            }, verifiedBlocks[0])
+            : openThreeBlocks.reduce((best, move) => {
+                const bestScore = scoreCandidateMove(cloneBoard(working), best, aiPlayer);
+                const moveScore = scoreCandidateMove(cloneBoard(working), move, aiPlayer);
+                return moveScore > bestScore ? move : best;
+            }, openThreeBlocks[0]);
         if (chosenOpenThreeBlock) {
             emitProgress('forced-open-three-block', { options: openThreeBlocks.length, move: chosenOpenThreeBlock });
             return chosenOpenThreeBlock;
@@ -1045,6 +1084,12 @@ onmessage = (event) => {
     const move = findBestMove(board, aiPlayer, initialDepth, { isHard });
     if (!move || board[move.r]?.[move.c] !== EMPTY) {
         postMessage({ type: 'move', token, move: null });
+        return;
+    }
+    if (!move || !Number.isInteger(move.r) || !Number.isInteger(move.c)
+        || !inBounds(move.r, move.c) || board[move.r]?.[move.c] !== EMPTY) {
+        const fallback = getAllEmptyMoves(board)[0] || null;
+        postMessage({ type: 'move', token, move: fallback });
         return;
     }
     postMessage({ type: 'move', token, move });

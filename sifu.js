@@ -267,6 +267,68 @@ function uniqueMoves(moves) {
     });
 }
 
+function countImmediateWins(board, player) {
+    let total = 0;
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            if (board[r][c] !== EMPTY) continue;
+            const test = cloneBoard(board);
+            test[r][c] = player;
+            if (isWinAfterMove(test, r, c, player)) total++;
+        }
+    }
+    return total;
+}
+
+function createsDoubleThreat(board, r, c, player) {
+    if (board[r]?.[c] !== EMPTY) return false;
+    const test = cloneBoard(board);
+    test[r][c] = player;
+    return countImmediateWins(test, player) >= 2;
+}
+
+function findDoubleThreatMove(board, player) {
+    const candidates = getCandidateMoves(board, player, 20);
+    let bestMove = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    for (const move of candidates) {
+        if (!createsDoubleThreat(board, move.r, move.c, player)) continue;
+        const score = scoreMove(board, move.r, move.c, player);
+        if (score > bestScore) {
+            bestScore = score;
+            bestMove = { r: move.r, c: move.c };
+        }
+    }
+
+    return bestMove;
+}
+
+function findCriticalDefensiveMove(board, player) {
+    const opponent = player === BLACK ? WHITE : BLACK;
+    const candidates = getCandidateMoves(board, player, 24);
+    const safeMoves = [];
+
+    for (const move of candidates) {
+        if (board[move.r][move.c] !== EMPTY) continue;
+        const test = cloneBoard(board);
+        test[move.r][move.c] = player;
+
+        if (findImmediateWin(test, opponent)) continue;
+        if (findDoubleThreatMove(test, opponent)) continue;
+
+        safeMoves.push({
+            r: move.r,
+            c: move.c,
+            score: scoreMove(board, move.r, move.c, player)
+        });
+    }
+
+    if (!safeMoves.length) return null;
+    safeMoves.sort((a, b) => b.score - a.score);
+    return { r: safeMoves[0].r, c: safeMoves[0].c };
+}
+
 function findOpenThreeBlockingMoves(board, player) {
     const opponent = player === BLACK ? WHITE : BLACK;
     const currentThreats = countOpenThreeThreats(board, opponent);
@@ -302,6 +364,12 @@ function chooseMove(board, payload) {
 
     const forcedBlock = findImmediateBlock(boardCopy, aiPlayer);
     if (forcedBlock) return forcedBlock;
+
+    const forcingAttack = findDoubleThreatMove(boardCopy, aiPlayer);
+    if (forcingAttack) return forcingAttack;
+
+    const criticalDefense = findCriticalDefensiveMove(boardCopy, aiPlayer);
+    if (criticalDefense) return criticalDefense;
 
     const openThreeBlocks = findOpenThreeBlockingMoves(boardCopy, aiPlayer);
     if (openThreeBlocks.length) {

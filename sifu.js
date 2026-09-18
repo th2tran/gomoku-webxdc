@@ -304,29 +304,129 @@ function findDoubleThreatMove(board, player) {
     return bestMove;
 }
 
-function findCriticalDefensiveMove(board, player) {
+function evaluateBoardPressure(board, player) {
     const opponent = player === BLACK ? WHITE : BLACK;
-    const candidates = getCandidateMoves(board, player, 24);
-    const safeMoves = [];
+    let pressure = 0;
 
-    for (const move of candidates) {
-        if (board[move.r][move.c] !== EMPTY) continue;
-        const test = cloneBoard(board);
-        test[move.r][move.c] = player;
-
-        if (findImmediateWin(test, opponent)) continue;
-        if (findDoubleThreatMove(test, opponent)) continue;
-
-        safeMoves.push({
-            r: move.r,
-            c: move.c,
-            score: scoreMove(board, move.r, move.c, player)
-        });
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            if (board[r][c] !== EMPTY) continue;
+            pressure += scoreMove(board, r, c, player);
+            pressure -= scoreMove(board, r, c, opponent) * 0.9;
+        }
     }
 
-    if (!safeMoves.length) return null;
-    safeMoves.sort((a, b) => b.score - a.score);
-    return { r: safeMoves[0].r, c: safeMoves[0].c };
+    return pressure;
+}
+
+function evaluateBoardSafety(board, player) {
+    const opponent = player === BLACK ? WHITE : BLACK;
+    const opponentImmediateWins = countImmediateWins(board, opponent);
+    if (opponentImmediateWins > 0) return Number.NEGATIVE_INFINITY + opponentImmediateWins;
+
+    const opponentDoubleThreat = findDoubleThreatMove(board, opponent);
+    if (opponentDoubleThreat) return -900000;
+
+    const myImmediateWins = countImmediateWins(board, player);
+    const myDoubleThreat = findDoubleThreatMove(board, player) ? 1 : 0;
+    const opponentOpenThrees = countOpenThreeThreats(board, opponent);
+    const myOpenThrees = countOpenThreeThreats(board, player);
+
+    return evaluateBoardPressure(board, player)
+        + (myImmediateWins * 250000)
+        + (myDoubleThreat * 150000)
+        + (myOpenThrees * 18000)
+        - (opponentOpenThrees * 32000);
+}
+
+function scoreDefensiveCandidate(board, r, c, player) {
+    if (board[r]?.[c] !== EMPTY) return Number.NEGATIVE_INFINITY;
+    const opponent = player === BLACK ? WHITE : BLACK;
+    const afterOurMove = cloneBoard(board);
+    afterOurMove[r][c] = player;
+
+    if (findImmediateWin(afterOurMove, opponent)) return Number.NEGATIVE_INFINITY;
+
+    const opponentReplies = getCandidateMoves(afterOurMove, opponent, 12);
+    if (!opponentReplies.length) {
+        return evaluateBoardSafety(afterOurMove, player);
+    }
+
+    let worstReplyScore = Number.POSITIVE_INFINITY;
+    for (const reply of opponentReplies) {
+        if (afterOurMove[reply.r][reply.c] !== EMPTY) continue;
+        const afterReply = cloneBoard(afterOurMove);
+        afterReply[reply.r][reply.c] = opponent;
+
+        if (isWinAfterMove(afterReply, reply.r, reply.c, opponent)) {
+            return Number.NEGATIVE_INFINITY;
+        }
+
+        let bestRecoveryScore = Number.NEGATIVE_INFINITY;
+        const recoveryMoves = getCandidateMoves(afterReply, player, 10);
+        for (const recovery of recoveryMoves) {
+            if (afterReply[recovery.r][recovery.c] !== EMPTY) continue;
+            const afterRecovery = cloneBoard(afterReply);
+            afterRecovery[recovery.r][recovery.c] = player;
+
+            if (isWinAfterMove(afterRecovery, recovery.r, recovery.c, player)) {
+                bestRecoveryScore = Math.max(bestRecoveryScore, 700000);
+                continue;
+            }
+
+            const safetyScore = evaluateBoardSafety(afterRecovery, player);
+            if (safetyScore > bestRecoveryScore) {
+                bestRecoveryScore = safetyScore;
+            }
+        }
+
+        if (bestRecoveryScore === Number.NEGATIVE_INFINITY) {
+            bestRecoveryScore = evaluateBoardSafety(afterReply, player);
+        }
+
+        if (bestRecoveryScore < worstReplyScore) {
+            worstReplyScore = bestRecoveryScore;
+        }
+    }
+
+    if (worstReplyScore === Number.POSITIVE_INFINITY) {
+        return evaluateBoardSafety(afterOurMove, player);
+    }
+
+    return worstReplyScore + scoreMove(board, r, c, player) * 0.2;
+}
+
+function findCriticalDefensiveMove(board, player) {
+    const candidates = getCandidateMoves(board, player, 24);
+    let bestMove = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    for (const move of candidates) {
+        const defensiveScore = scoreDefensiveCandidate(board, move.r, move.c, player);
+        if (defensiveScore > bestScore) {
+            bestScore = defensiveScore;
+            bestMove = { r: move.r, c: move.c };
+        }
+    }
+
+    if (!bestMove || bestScore === Number.NEGATIVE_INFINITY) return null;
+    return bestMove;
+}
+
+function shouldRunCriticalDefense(board, player, moveCount) {
+    const opponent = player === BLACK ? WHITE : BLACK;
+    if (moveCount < 10) return false;
+
+    const opponentOpenThrees = countOpenThreeThreats(board, opponent);
+    if (opponentOpenThrees >= 2) return true;
+
+    const myOpenThrees = countOpenThreeThreats(board, player);
+    if (opponentOpenThrees >= 1 && myOpenThrees === 0 && moveCount >= 14) return true;
+
+    const opponentDoubleThreat = findDoubleThreatMove(board, opponent);
+    if (opponentDoubleThreat) return true;
+
+    return false;
 }
 
 function findOpenThreeBlockingMoves(board, player) {
@@ -368,8 +468,10 @@ function chooseMove(board, payload) {
     const forcingAttack = findDoubleThreatMove(boardCopy, aiPlayer);
     if (forcingAttack) return forcingAttack;
 
-    const criticalDefense = findCriticalDefensiveMove(boardCopy, aiPlayer);
-    if (criticalDefense) return criticalDefense;
+    if (shouldRunCriticalDefense(boardCopy, aiPlayer, moveCount)) {
+        const criticalDefense = findCriticalDefensiveMove(boardCopy, aiPlayer);
+        if (criticalDefense) return criticalDefense;
+    }
 
     const openThreeBlocks = findOpenThreeBlockingMoves(boardCopy, aiPlayer);
     if (openThreeBlocks.length) {

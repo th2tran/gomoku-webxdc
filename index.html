@@ -233,15 +233,35 @@
             margin-bottom: 8px;
             flex-shrink: 0;
         }
+        .game-history-header-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-right: 16px;
+        }
+        .game-history-import-btn,
         .game-history-clear-btn {
             padding: 4px 8px;
-            margin-right: 16px;
             font-size: 11px;
             border: none;
             border-radius: 4px;
             background: #52677d;
             color: white;
             cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .game-history-import-btn svg,
+        .game-history-clear-btn svg {
+            display: block;
+            width: 24px;
+            height: 24px;
+            fill: #e3e3e3;
+        }
+        .game-history-import-btn:hover,
+        .game-history-clear-btn:hover {
+            background: #27ae60;
         }
         .game-history-list {
             display: flex;
@@ -261,6 +281,36 @@
             background: #52677d;
             color: white;
             border: 1px solid rgba(255,255,255,0.08);
+        }
+        .game-history-entry {
+            display: flex;
+            gap: 8px;
+            align-items: stretch;
+        }
+        .game-history-entry .game-history-item {
+            flex: 1;
+            min-width: 0;
+        }
+        .game-history-export-btn {
+            flex-shrink: 0;
+            padding: 10px 12px;
+            background: #3d566e;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .game-history-export-btn:hover {
+            background: #27ae60;
+        }
+        .game-history-export-btn svg {
+            display: block;
+            width: 24px;
+            height: 24px;
+            fill: #e3e3e3;
+        }
+        .game-history-export-btn:hover svg {
+            fill: #e3e3e3;
         }
         .game-history-item:hover {
             background: #5f7892;
@@ -716,6 +766,150 @@
             color: #d6e4f0;
             min-height: 180px;
         }
+        .sgf-export-popup {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 255;
+            background: rgba(0, 0, 0, 0.58);
+            padding: 12px;
+            box-sizing: border-box;
+        }
+        .sgf-export-popup.visible {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .sgf-export-panel {
+            width: min(760px, 100%);
+            max-height: min(80vh, calc(100vh - 24px));
+            background: #1f2d3a;
+            border: 1px solid #4a6075;
+            border-radius: 10px;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sgf-export-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 14px;
+            border-bottom: 1px solid #4a6075;
+            font-weight: 700;
+        }
+        .sgf-export-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .sgf-export-actions button {
+            padding: 6px 10px;
+            font-size: 13px;
+            background: #52677d;
+        }
+        .sgf-export-body {
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .sgf-export-description {
+            color: #c8d6e5;
+            font-size: 14px;
+        }
+        .sgf-export-textarea {
+            width: 100%;
+            min-height: 280px;
+            resize: vertical;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #4a6075;
+            background: #12202d;
+            color: #d6e4f0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 12px;
+            line-height: 1.45;
+            box-sizing: border-box;
+        }
+        .sgf-export-status {
+            min-height: 20px;
+            color: #9eb4c8;
+            font-size: 13px;
+        }
+        .sgf-import-popup {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 255;
+            background: rgba(0, 0, 0, 0.58);
+            padding: 12px;
+            box-sizing: border-box;
+        }
+        .sgf-import-popup.visible {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .sgf-import-panel {
+            width: min(760px, 100%);
+            max-height: min(80vh, calc(100vh - 24px));
+            background: #1f2d3a;
+            border: 1px solid #4a6075;
+            border-radius: 10px;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sgf-import-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 14px;
+            border-bottom: 1px solid #4a6075;
+            font-weight: 700;
+        }
+        .sgf-import-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .sgf-import-actions button {
+            padding: 6px 10px;
+            font-size: 13px;
+            background: #52677d;
+        }
+        .sgf-import-body {
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .sgf-import-description {
+            color: #c8d6e5;
+            font-size: 14px;
+        }
+        .sgf-import-textarea {
+            width: 100%;
+            min-height: 280px;
+            resize: vertical;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #4a6075;
+            background: #12202d;
+            color: #d6e4f0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 12px;
+            line-height: 1.45;
+            box-sizing: border-box;
+        }
+        .sgf-import-status {
+            min-height: 20px;
+            color: #9eb4c8;
+            font-size: 13px;
+        }
 
         @media (max-width: 768px) {
             body {
@@ -927,7 +1121,10 @@
             <div class="game-history-panel" id="game-history-panel">
                 <div class="game-history-header">
                     <h3>Game History</h3>
-                    <button type="button" class="game-history-clear-btn" id="game-history-clear-btn">Clear History</button>
+                    <div class="game-history-header-actions">
+                        <button type="button" class="game-history-import-btn" id="game-history-import-btn" title="Import game history from SGF" aria-label="Import game history from SGF"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="m480-280 160-160-56-56-64 62v-166h-80v166l-64-62-56 56 160 160ZM240-80q-33 0-56.5-23.5T160-160v-480l240-240h320q33 0 56.5 23.5T800-800v640q0 33-23.5 56.5T720-80H240Zm0-80h480v-640H434L240-606v446Zm0 0h480-480Z"/></svg></button>
+                        <button type="button" class="game-history-clear-btn" id="game-history-clear-btn" title="Clear all game history" aria-label="Clear all game history"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M120-280v-80h560v80H120Zm80-160v-80h560v80H200Zm80-160v-80h560v80H280Z"/></svg></button>
+                    </div>
                 </div>
                 <div class="game-history-list" id="game-history-list"></div>
             </div>
@@ -1027,6 +1224,38 @@
         </div>
     </div>
     <button class="notifications-tab" id="notifications-tab-btn" type="button" aria-label="Expand notifications">◀</button>
+    <div class="sgf-export-popup" id="sgf-export-popup" aria-hidden="true">
+        <div class="sgf-export-panel" role="dialog" aria-modal="true" aria-labelledby="sgf-export-title">
+            <div class="sgf-export-header">
+                <span id="sgf-export-title">Export game as SGF</span>
+                <div class="sgf-export-actions">
+                    <button id="sgf-export-copy-btn" type="button">Copy</button>
+                    <button id="sgf-export-close-btn" type="button">Close</button>
+                </div>
+            </div>
+            <div class="sgf-export-body">
+                <div class="sgf-export-description">Copy the SGF text below and paste it wherever you need.</div>
+                <textarea id="sgf-export-textarea" class="sgf-export-textarea" spellcheck="false" readonly></textarea>
+                <div id="sgf-export-status" class="sgf-export-status"></div>
+            </div>
+        </div>
+    </div>
+    <div class="sgf-import-popup" id="sgf-import-popup" aria-hidden="true">
+        <div class="sgf-import-panel" role="dialog" aria-modal="true" aria-labelledby="sgf-import-title">
+            <div class="sgf-import-header">
+                <span id="sgf-import-title">Import game from SGF</span>
+                <div class="sgf-import-actions">
+                    <button id="sgf-import-submit-btn" type="button">Import</button>
+                    <button id="sgf-import-close-btn" type="button">Close</button>
+                </div>
+            </div>
+            <div class="sgf-import-body">
+                <div class="sgf-import-description">Paste SGF text below to save it as a new history entry.</div>
+                <textarea id="sgf-import-textarea" class="sgf-import-textarea" spellcheck="false"></textarea>
+                <div id="sgf-import-status" class="sgf-import-status"></div>
+            </div>
+        </div>
+    </div>
 
     <script src="version.js"></script>
     <script>
@@ -1054,6 +1283,7 @@
         const connectedPeersListEl = document.getElementById('connected-peers-list');
         const gameHistoryPanel = document.getElementById('game-history-panel');
         const gameHistoryList = document.getElementById('game-history-list');
+        const gameHistoryImportBtn = document.getElementById('game-history-import-btn');
         const gameHistoryClearBtn = document.getElementById('game-history-clear-btn');
         const replayBanner = document.getElementById('replay-banner');
         const replayControls = document.getElementById('replay-controls');
@@ -1090,6 +1320,16 @@
         const notificationsToggleBtn = document.getElementById('notifications-toggle-btn');
         const notificationsLogEl = document.getElementById('notifications-log');
         const notificationsClearBtn = document.getElementById('notifications-clear-btn');
+        const sgfExportPopup = document.getElementById('sgf-export-popup');
+        const sgfExportTextarea = document.getElementById('sgf-export-textarea');
+        const sgfExportStatus = document.getElementById('sgf-export-status');
+        const sgfExportCopyBtn = document.getElementById('sgf-export-copy-btn');
+        const sgfExportCloseBtn = document.getElementById('sgf-export-close-btn');
+        const sgfImportPopup = document.getElementById('sgf-import-popup');
+        const sgfImportTextarea = document.getElementById('sgf-import-textarea');
+        const sgfImportStatus = document.getElementById('sgf-import-status');
+        const sgfImportSubmitBtn = document.getElementById('sgf-import-submit-btn');
+        const sgfImportCloseBtn = document.getElementById('sgf-import-close-btn');
         const debugEntries = [];
         const maxDebugEntries = 200;
         const notifications = [];
@@ -1364,6 +1604,275 @@
             return Array.isArray(moveLog) ? moveLog.map((move) => ({ ...move })) : [];
         }
 
+        function sgfEscapeValue(value) {
+            return String(value ?? '')
+                .replace(/\\/g, '\\\\')
+                .replace(/\]/g, '\\]');
+        }
+
+        function sgfCoordinate(value) {
+            const alphabet = 'abcdefghijklmnopqrstuvwxyz';
+            if (!Number.isInteger(value) || value < 0 || value >= alphabet.length) return '';
+            return alphabet[value];
+        }
+
+        function buildSgfContent(entry) {
+            const moves = getReplayMoves(entry);
+            const date = new Date(entry?.finishedAt || entry?.startedAt || Date.now());
+            const dateText = Number.isNaN(date.getTime()) ? '' : date.getUTCFullYear().toString();
+            const blackName = cleanPlayerName(entry?.players?.[1]);
+            const whiteName = cleanPlayerName(entry?.players?.[2]);
+            const winnerPlayer = entry?.result?.winnerPlayer === 1 || entry?.result?.winnerPlayer === 2
+                ? entry.result.winnerPlayer
+                : null;
+            const winnerCode = winnerPlayer === 1 ? 'B' : winnerPlayer === 2 ? 'W' : '0';
+            const resultSummary = winnerPlayer ? `${winnerCode}+Win` : '0';
+            const headerParts = [
+                `EV[${sgfEscapeValue(entry?.mode || 'gomoku')}]`,
+                'RO[1]',
+                `PB[${sgfEscapeValue(blackName)}]`,
+                'BR[]',
+                `PW[${sgfEscapeValue(whiteName)}]`,
+                'WR[]',
+                'KM[0]',
+                `RE[${sgfEscapeValue(resultSummary)}]`,
+                `DT[${sgfEscapeValue(dateText)}]`,
+                'GM[1]',
+                'FF[4]',
+                'CA[UTF-8]',
+                `SZ[${boardSize}]`,
+                `GN[${sgfEscapeValue('Gomoku saved game')}]`,
+                `AP[${sgfEscapeValue(`gomoku-webxdc:${appVersion}`)}]`
+            ];
+            const moveParts = moves
+                .filter((move) => isOnBoard(move?.r, move?.c) && (move?.player === 1 || move?.player === 2))
+                .map((move) => {
+                    const color = move.player === 1 ? 'B' : 'W';
+                    const coord = `${sgfCoordinate(move.c)}${sgfCoordinate(move.r)}`;
+                    return `;${color}[${coord}]`;
+                });
+            const moveLines = [];
+            for (let i = 0; i < moveParts.length; i += 10) {
+                moveLines.push(moveParts.slice(i, i + 10).join(''));
+            }
+            return [
+                '(;',
+                ...headerParts,
+                '',
+                ...moveLines,
+                ')'
+            ].join('\n');
+        }
+
+        function setSgfExportStatus(message) {
+            if (!sgfExportStatus) return;
+            sgfExportStatus.textContent = message || '';
+        }
+
+        function hideSgfExportPopup() {
+            if (!sgfExportPopup) return;
+            sgfExportPopup.classList.remove('visible');
+            sgfExportPopup.setAttribute('aria-hidden', 'true');
+            setSgfExportStatus('');
+        }
+
+        function showSgfExportPopup(sgfContent) {
+            if (!sgfExportPopup || !sgfExportTextarea) return;
+            sgfExportTextarea.value = sgfContent;
+            sgfExportPopup.classList.add('visible');
+            sgfExportPopup.setAttribute('aria-hidden', 'false');
+            setSgfExportStatus('SGF ready to copy.');
+            requestAnimationFrame(() => {
+                sgfExportTextarea.focus();
+                sgfExportTextarea.select();
+            });
+        }
+
+        async function copySgfExportToClipboard() {
+            if (!sgfExportTextarea) return;
+            const text = sgfExportTextarea.value;
+            try {
+                if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    sgfExportTextarea.focus();
+                    sgfExportTextarea.select();
+                    const copied = document.execCommand('copy');
+                    if (!copied) throw new Error('Copy command was rejected');
+                }
+                setSgfExportStatus('Copied to clipboard.');
+            } catch (error) {
+                setSgfExportStatus('Clipboard copy failed. Copy manually from the textbox.');
+                console.warn('Unable to copy SGF export:', error);
+            }
+        }
+
+        function exportGameHistoryEntryToSgf(entry) {
+            if (!entry) return;
+            const sgfContent = buildSgfContent(entry);
+            showSgfExportPopup(sgfContent);
+        }
+
+        function setSgfImportStatus(message) {
+            if (!sgfImportStatus) return;
+            sgfImportStatus.textContent = message || '';
+        }
+
+        function showSgfImportPopup() {
+            if (!sgfImportPopup || !sgfImportTextarea) return;
+            sgfImportPopup.classList.add('visible');
+            sgfImportPopup.setAttribute('aria-hidden', 'false');
+            setSgfImportStatus('');
+            requestAnimationFrame(() => {
+                sgfImportTextarea.focus();
+            });
+        }
+
+        function hideSgfImportPopup() {
+            if (!sgfImportPopup) return;
+            sgfImportPopup.classList.remove('visible');
+            sgfImportPopup.setAttribute('aria-hidden', 'true');
+            setSgfImportStatus('');
+        }
+
+        function parseSgfNodeProperties(source) {
+            const properties = [];
+            const propertyPattern = /([A-Za-z]+)((?:\[(?:\\.|[^\]])*\])+)/g;
+            let match;
+            while ((match = propertyPattern.exec(source))) {
+                const values = [];
+                const valuePattern = /\[((?:\\.|[^\]])*)\]/g;
+                let valueMatch;
+                while ((valueMatch = valuePattern.exec(match[2]))) {
+                    values.push(valueMatch[1].replace(/\\([\]\\])/g, '$1'));
+                }
+                properties.push([match[1].toUpperCase(), values]);
+            }
+            return properties;
+        }
+
+        function parseSgfContent(sgfContent) {
+            if (typeof sgfContent !== 'string' || !sgfContent.trim()) {
+                throw new Error('Paste SGF content to import.');
+            }
+            const normalized = sgfContent.trim();
+            const sizeMatch = normalized.match(/SZ\[(\d+)\]/i);
+            const parsedSize = sizeMatch ? Number.parseInt(sizeMatch[1], 10) : boardSize;
+            if (parsedSize !== boardSize) {
+                throw new Error(`Only ${boardSize}x${boardSize} SGF files are supported.`);
+            }
+
+            const moves = [];
+            const movePattern = /;([BW])\[([a-z]{0,2})\]/ig;
+            let match;
+            while ((match = movePattern.exec(normalized))) {
+                const coord = (match[2] || '').toLowerCase();
+                if (coord.length !== 2) {
+                    throw new Error('Only standard point moves are supported.');
+                }
+                const c = coord.charCodeAt(0) - 97;
+                const r = coord.charCodeAt(1) - 97;
+                if (!isOnBoard(r, c)) {
+                    throw new Error('SGF contains a move outside the current board size.');
+                }
+                moves.push({
+                    moveNumber: moves.length + 1,
+                    r,
+                    c,
+                    player: match[1].toUpperCase() === 'B' ? 1 : 2,
+                    at: null,
+                    source: 'sgf-import',
+                    peerId: null,
+                    name: null,
+                    addr: null
+                });
+            }
+
+            if (!moves.length) {
+                throw new Error('No moves were found in the SGF.');
+            }
+
+            const rootNodeMatch = normalized.match(/\(\s*;([^()]*)/);
+            const rootProperties = rootNodeMatch ? parseSgfNodeProperties(rootNodeMatch[1]) : [];
+            const propertyMap = new Map(rootProperties);
+            const importedBoard = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
+            let winnerPlayer = null;
+
+            moves.forEach((move) => {
+                if (importedBoard[move.r][move.c] !== 0) {
+                    throw new Error(`SGF contains duplicate move at ${move.r + 1}, ${move.c + 1}.`);
+                }
+                importedBoard[move.r][move.c] = move.player;
+                if (checkWinOnBoardState(importedBoard, move.r, move.c, move.player)) {
+                    winnerPlayer = move.player;
+                }
+            });
+
+            const parseDateValue = () => {
+                const value = propertyMap.get('DT')?.[0];
+                if (!value) return Date.now();
+                const timestamp = Date.parse(value);
+                return Number.isNaN(timestamp) ? Date.now() : timestamp;
+            };
+
+            const blackName = cleanPlayerName(propertyMap.get('PB')?.[0] || 'Player 1');
+            const whiteName = cleanPlayerName(propertyMap.get('PW')?.[0] || 'Player 2');
+            const finishedAt = parseDateValue();
+            const mode = propertyMap.get('EV')?.[0] || 'sgf-import';
+
+            return {
+                mode,
+                startedAt: finishedAt,
+                finishedAt,
+                players: {
+                    1: blackName,
+                    2: whiteName
+                },
+                result: {
+                    winnerPlayer,
+                    winnerName: winnerPlayer === 1 ? blackName : winnerPlayer === 2 ? whiteName : 'Imported Game',
+                    finishedAt
+                },
+                moves,
+                board: importedBoard,
+                metadata: {
+                    importSource: 'sgf',
+                    importedAt: Date.now()
+                },
+                completed: !!winnerPlayer
+            };
+        }
+
+        function importGameHistoryFromSgf() {
+            if (!sgfImportTextarea) return;
+            try {
+                const parsed = parseSgfContent(sgfImportTextarea.value);
+                const entry = buildGameHistoryEntry({
+                    mode: parsed.mode,
+                    startedAt: parsed.startedAt,
+                    finishedAt: parsed.finishedAt,
+                    players: parsed.players,
+                    result: parsed.result,
+                    moves: parsed.moves,
+                    board: parsed.board,
+                    metadata: parsed.metadata
+                });
+                entry.completed = parsed.completed;
+                gameHistory.unshift(entry);
+                gameHistory = gameHistory.slice(0, 100);
+                saveGameHistory();
+                renderGameHistory();
+                sgfImportTextarea.value = '';
+                hideSgfImportPopup();
+                addNotification(`Imported SGF game with ${entry.moves.length} moves.`, {
+                    id: `sgf-import:${entry.id}`,
+                    at: Date.now()
+                });
+            } catch (error) {
+                setSgfImportStatus(error instanceof Error ? error.message : 'Unable to import SGF.');
+            }
+        }
+
         function getReplayMoves(entry) {
             const boardSnapshot = Array.isArray(entry?.board) ? entry.board : null;
             if (Array.isArray(entry?.moves) && entry.moves.length) return cloneMoveLog(entry.moves);
@@ -1404,8 +1913,8 @@
                 startedAt: extra.startedAt || Date.now(),
                 finishedAt: extra.finishedAt || Date.now(),
                 players: {
-                    1: p1NameInput.value,
-                    2: p2NameInput.value
+                    1: extra.players?.[1] || p1NameInput.value,
+                    2: extra.players?.[2] || p2NameInput.value
                 },
                 result: extra.result || deriveGameResult(),
                 moves: moveHistory.map((move) => ({
@@ -1524,6 +2033,8 @@
                 return;
             }
             for (const entry of gameHistory) {
+                const row = document.createElement('div');
+                row.className = 'game-history-entry';
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'game-history-item';
@@ -1539,7 +2050,19 @@
                     startReplay(entry.id, false);
                     renderGameHistory();
                 });
-                gameHistoryList.appendChild(button);
+                const exportBtn = document.createElement('button');
+                exportBtn.type = 'button';
+                exportBtn.className = 'game-history-export-btn';
+                exportBtn.title = 'Export game to SGF';
+                exportBtn.setAttribute('aria-label', `Export ${dateText} game to SGF`);
+                exportBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M480-480ZM202-65l-56-57 118-118h-90v-80h226v226h-80v-89L202-65Zm278-15v-80h240v-440H520v-200H240v400h-80v-400q0-33 23.5-56.5T240-880h320l240 240v480q0 33-23.5 56.5T720-80H480Z"/></svg>';
+                exportBtn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    exportGameHistoryEntryToSgf(entry);
+                });
+                row.appendChild(button);
+                row.appendChild(exportBtn);
+                gameHistoryList.appendChild(row);
             }
         }
 
@@ -1581,7 +2104,33 @@
         if (replayNextBtn) replayNextBtn.addEventListener('click', () => replayStep(1));
         if (replayPlayPauseBtn) replayPlayPauseBtn.addEventListener('click', toggleReplayPlayback);
         if (replayExitBtn) replayExitBtn.addEventListener('click', stopReplay);
+        if (gameHistoryImportBtn) gameHistoryImportBtn.addEventListener('click', showSgfImportPopup);
         if (gameHistoryClearBtn) gameHistoryClearBtn.addEventListener('click', clearGameHistory);
+        if (sgfExportCopyBtn) sgfExportCopyBtn.addEventListener('click', copySgfExportToClipboard);
+        if (sgfExportCloseBtn) sgfExportCloseBtn.addEventListener('click', hideSgfExportPopup);
+        if (sgfImportSubmitBtn) sgfImportSubmitBtn.addEventListener('click', importGameHistoryFromSgf);
+        if (sgfImportCloseBtn) sgfImportCloseBtn.addEventListener('click', hideSgfImportPopup);
+        if (sgfExportPopup) {
+            sgfExportPopup.addEventListener('click', (event) => {
+                if (event.target === sgfExportPopup) {
+                    hideSgfExportPopup();
+                }
+            });
+        }
+        if (sgfImportPopup) {
+            sgfImportPopup.addEventListener('click', (event) => {
+                if (event.target === sgfImportPopup) {
+                    hideSgfImportPopup();
+                }
+            });
+        }
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && sgfExportPopup && sgfExportPopup.classList.contains('visible')) {
+                hideSgfExportPopup();
+            } else if (event.key === 'Escape' && sgfImportPopup && sgfImportPopup.classList.contains('visible')) {
+                hideSgfImportPopup();
+            }
+        });
 
         function rebuildReplayBoard() {
             board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));

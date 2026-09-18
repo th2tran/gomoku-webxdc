@@ -495,7 +495,7 @@ function getAllEmptyMoves(boardState) {
 }
 
 function findImmediateWinningMoves(boardState, color) {
-    const moves = getCandidateMoves(boardState, color, 12).filter((move) => boardState[move.r]?.[move.c] === EMPTY);
+    const moves = getCandidateMoves(boardState, color, 12);
     const winningMoves = [];
     for (const move of moves) {
         boardState[move.r][move.c] = color;
@@ -508,7 +508,7 @@ function findImmediateWinningMoves(boardState, color) {
 }
 
 function hasImmediateWinningMove(boardState, color) {
-    const moves = getCandidateMoves(boardState, color, 12).filter((move) => boardState[move.r]?.[move.c] === EMPTY);
+    const moves = getCandidateMoves(boardState, color, 12);
     for (const move of moves) {
         boardState[move.r][move.c] = color;
         const isWinningMove = hasFive(boardState, color);

@@ -6,6 +6,7 @@ const WHITE = 2;
 const SIZE = 15;
 const CENTER = Math.floor(SIZE / 2);
 const DIRECTIONS = [[0, 1], [1, 0], [1, 1], [1, -1]];
+const RENJU_RULES_ENABLED = true;
 
 function cloneBoard(board) {
     return board.map((row) => row.slice());
@@ -25,7 +26,30 @@ function inBounds(r, c) {
     return r >= 0 && r < SIZE && c >= 0 && c < SIZE;
 }
 
+function getLineLength(board, r, c, player, dr, dc) {
+    let count = 1;
+    let rr = r + dr;
+    let cc = c + dc;
+    while (inBounds(rr, cc) && board[rr][cc] === player) {
+        count++;
+        rr += dr;
+        cc += dc;
+    }
+    rr = r - dr;
+    cc = c - dc;
+    while (inBounds(rr, cc) && board[rr][cc] === player) {
+        count++;
+        rr -= dr;
+        cc -= dc;
+    }
+    return count;
+}
+
 function isWinAfterMove(board, r, c, player) {
+    if (RENJU_RULES_ENABLED && player === BLACK) {
+        const lineLengths = DIRECTIONS.map(([dr, dc]) => getLineLength(board, r, c, player, dr, dc));
+        if (lineLengths.some((length) => length > 5)) return false;
+    }
     for (const [dr, dc] of DIRECTIONS) {
         let count = 1;
         for (const step of [-1, 1]) {
@@ -194,7 +218,7 @@ function scoreMove(board, r, c, player) {
 function findImmediateWin(board, player) {
     for (let r = 0; r < SIZE; r++) {
         for (let c = 0; c < SIZE; c++) {
-            if (board[r][c] !== EMPTY) continue;
+            if (!isLegalMove(board, r, c, player)) continue;
             const test = cloneBoard(board);
             test[r][c] = player;
             if (isWinAfterMove(test, r, c, player)) return { r, c };
@@ -207,7 +231,7 @@ function findImmediateBlock(board, player) {
     const opponent = player === BLACK ? WHITE : BLACK;
     for (let r = 0; r < SIZE; r++) {
         for (let c = 0; c < SIZE; c++) {
-            if (board[r][c] !== EMPTY) continue;
+            if (!isLegalMove(board, r, c, opponent)) continue;
             const test = cloneBoard(board);
             test[r][c] = opponent;
             if (isWinAfterMove(test, r, c, opponent)) return { r, c };
@@ -247,7 +271,7 @@ function enumerateImmediateWinningMoves(board, player) {
     const moves = [];
     for (let r = 0; r < SIZE; r++) {
         for (let c = 0; c < SIZE; c++) {
-            if (board[r][c] !== EMPTY) continue;
+            if (!isLegalMove(board, r, c, player)) continue;
             const test = cloneBoard(board);
             test[r][c] = player;
             if (isWinAfterMove(test, r, c, player)) moves.push({ r, c });
@@ -270,7 +294,7 @@ function countImmediateWins(board, player) {
     let total = 0;
     for (let r = 0; r < SIZE; r++) {
         for (let c = 0; c < SIZE; c++) {
-            if (board[r][c] !== EMPTY) continue;
+            if (!isLegalMove(board, r, c, player)) continue;
             const test = cloneBoard(board);
             test[r][c] = player;
             if (isWinAfterMove(test, r, c, player)) total++;
@@ -289,6 +313,85 @@ function extractDirectionalSegment(board, row, col, dr, dc, radius = 4) {
         cells.push(inBounds(rr, cc) ? board[rr][cc] : null);
     }
     return { cells, centerIndex };
+}
+
+function collectThreatMatchesForPlacedStone(board, r, c, player) {
+    if (!inBounds(r, c) || board[r][c] !== player) {
+        return { openThrees: [], fours: [] };
+    }
+    const openThrees = [];
+    const foursByDirection = new Map();
+    const patterns = [
+        { length: 5, type: 'simple-four' },
+        { length: 6, type: 'open-four' },
+        { length: 6, type: 'open-three' }
+    ];
+
+    for (const [dr, dc] of DIRECTIONS) {
+        const segment = extractDirectionalSegment(board, r, c, dr, dc, 4);
+        for (const pattern of patterns) {
+            for (let start = 0; start <= segment.cells.length - pattern.length; start++) {
+                const end = start + pattern.length;
+                if (segment.centerIndex < start || segment.centerIndex >= end) continue;
+                const window = segment.cells.slice(start, end);
+                if (window.includes(null)) continue;
+                if (window.some((value) => value !== EMPTY && value !== player)) continue;
+
+                let threatType = null;
+                const stones = window.filter((value) => value === player).length;
+                const empties = [];
+                for (let i = 0; i < window.length; i++) {
+                    if (window[i] === EMPTY) empties.push(i);
+                }
+
+                if (pattern.length === 5 && stones === 4 && empties.length === 1) {
+                    threatType = 'simple-four';
+                } else if (pattern.length === 6 && stones === 4 && empties.length === 2 && empties[0] === 0 && empties[1] === 5) {
+                    threatType = 'open-four';
+                } else if (pattern.length === 6 && stones === 3 && empties.length === 3) {
+                    const inner = window.slice(1, 5);
+                    const innerStones = inner.filter((value) => value === player).length;
+                    const innerEmpties = inner.filter((value) => value === EMPTY).length;
+                    if (window[0] === EMPTY && window[5] === EMPTY && innerStones === 3 && innerEmpties === 1 && inner[0] !== EMPTY && inner[3] !== EMPTY) {
+                        threatType = 'open-three';
+                    }
+                }
+
+                if (!threatType) continue;
+                if (threatType === 'open-three') {
+                    openThrees.push({ type: threatType, dr, dc, start });
+                    continue;
+                }
+
+                const completionSquares = [];
+                for (const emptyIndex of empties) {
+                    const rr = r + dr * (start + emptyIndex - segment.centerIndex);
+                    const cc = c + dc * (start + emptyIndex - segment.centerIndex);
+                    if (!inBounds(rr, cc) || board[rr][cc] !== EMPTY) continue;
+                    const nextBoard = cloneBoard(board);
+                    nextBoard[rr][cc] = player;
+                    const nextLength = getLineLength(nextBoard, rr, cc, player, dr, dc);
+                    if (nextLength === 5) {
+                        completionSquares.push(`${rr},${cc}`);
+                    }
+                }
+                if (!completionSquares.length) continue;
+
+                const directionKey = `${dr},${dc}`;
+                const existing = foursByDirection.get(directionKey) || new Set();
+                completionSquares.forEach((square) => existing.add(square));
+                foursByDirection.set(directionKey, existing);
+            }
+        }
+    }
+
+    const fours = Array.from(foursByDirection.entries()).map(([directionKey, completionSquares]) => ({
+        type: completionSquares.size >= 2 ? 'open-four' : 'simple-four',
+        directionKey,
+        completionSquares: Array.from(completionSquares)
+    }));
+
+    return { openThrees, fours };
 }
 
 function classifyThreatAtMove(board, r, c, player) {
@@ -352,9 +455,39 @@ function classifyThreatAtMove(board, r, c, player) {
     return bestThreat;
 }
 
+function getRenjuFoulInfo(board, r, c, player) {
+    if (!RENJU_RULES_ENABLED || player !== BLACK || !inBounds(r, c)) return null;
+    const test = cloneBoard(board);
+    if (test[r][c] === EMPTY) {
+        test[r][c] = player;
+    } else if (test[r][c] !== player) {
+        return null;
+    }
+    const overline = DIRECTIONS.some(([dr, dc]) => getLineLength(test, r, c, player, dr, dc) > 5);
+    const threats = collectThreatMatchesForPlacedStone(test, r, c, player);
+    const doubleThree = threats.openThrees.length >= 2;
+    const doubleFour = threats.fours.length >= 2;
+    if (!overline && !doubleThree && !doubleFour) return null;
+    return {
+        overline,
+        doubleThree,
+        doubleFour,
+        openThreeCount: threats.openThrees.length,
+        fourCount: threats.fours.length
+    };
+}
+
+function isLegalMove(board, r, c, player) {
+    if (!inBounds(r, c) || board[r]?.[c] !== EMPTY) return false;
+    return !getRenjuFoulInfo(board, r, c, player);
+}
+
 function getThreatSpaceCandidateMoves(board, player, limit = 16) {
     const moves = getCandidateMoves(board, player, Math.max(limit * 2, 16));
     const ranked = moves.map((move) => {
+        if (!isLegalMove(board, move.r, move.c, player)) {
+            return { ...move, score: Number.NEGATIVE_INFINITY };
+        }
         const threat = classifyThreatAtMove(board, move.r, move.c, player);
         return {
             ...move,
@@ -410,7 +543,7 @@ function findThreatBlockingMoves(board, player, threatTypes) {
     const blocks = [];
     for (let r = 0; r < SIZE; r++) {
         for (let c = 0; c < SIZE; c++) {
-            if (board[r][c] !== EMPTY) continue;
+            if (!isLegalMove(board, r, c, player)) continue;
             const test = cloneBoard(board);
             test[r][c] = player;
             let remainingSeverity = 0;
@@ -472,7 +605,7 @@ function runThreatSpaceSearch(board, attacker, defender, depth = 3) {
 }
 
 function createsDoubleThreat(board, r, c, player) {
-    if (board[r]?.[c] !== EMPTY) return false;
+    if (!isLegalMove(board, r, c, player)) return false;
     const test = cloneBoard(board);
     test[r][c] = player;
     return countImmediateWins(test, player) >= 2;
@@ -531,7 +664,7 @@ function evaluateBoardSafety(board, player) {
 }
 
 function scoreDefensiveCandidate(board, r, c, player) {
-    if (board[r]?.[c] !== EMPTY) return Number.NEGATIVE_INFINITY;
+    if (!isLegalMove(board, r, c, player)) return Number.NEGATIVE_INFINITY;
     const opponent = player === BLACK ? WHITE : BLACK;
     const afterOurMove = cloneBoard(board);
     afterOurMove[r][c] = player;
@@ -747,6 +880,7 @@ function chooseMove(board, payload) {
     let bestMove = candidates[0];
     let bestScore = Number.NEGATIVE_INFINITY;
     for (const candidate of candidates) {
+        if (!isLegalMove(boardCopy, candidate.r, candidate.c, aiPlayer)) continue;
         const score = scoreMove(boardCopy, candidate.r, candidate.c, aiPlayer);
         if (score > bestScore) {
             bestScore = score;

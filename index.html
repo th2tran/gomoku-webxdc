@@ -604,6 +604,28 @@
             margin-bottom: -4px;
         }
         .control-group { display: flex; align-items: center; gap: 8px; }
+        .control-label-with-hint {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .control-hint-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            color: #d6e4f0;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: help;
+            user-select: none;
+        }
+        .control-hint-icon[hidden] {
+            display: none;
+        }
         .control-group label { font-weight: 700; color: #ecf0f1; }
         select, button { padding: 10px 15px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; }
         select { background-color: #ecf0f1; color: #2c3e50; font-weight: bold; padding-left: 8px; padding-right: 8px; }
@@ -1173,7 +1195,16 @@
                     <option value="pve">Local vs Computer</option>
                 </select>
                 <div class="control-group" id="difficulty-control" hidden>
-                    <label for="difficulty-select">Difficulty</label>
+                    <label for="difficulty-select" class="control-label-with-hint">
+                        <span>Difficulty</span>
+                        <span
+                            id="difficulty-renju-hint"
+                            class="control-hint-icon"
+                            title="Hard currently enforces Black Renju fouls only: overline, double-three, and double-four. It does not enforce Renju opening rules such as center-first."
+                            aria-label="Hard Renju rules info"
+                            hidden
+                        >?</span>
+                    </label>
                     <select id="difficulty-select">
                         <option value="2">Easy</option>
                         <option value="4" selected>Medium</option>
@@ -1306,6 +1337,7 @@
         const gameModeSelect = document.getElementById('game-mode');
         const difficultyControl = document.getElementById('difficulty-control');
         const difficultySelect = document.getElementById('difficulty-select');
+        const difficultyRenjuHint = document.getElementById('difficulty-renju-hint');
         const titleEl = document.getElementById('title');
         const resetBtn = document.getElementById('reset-btn');
         const debugPopup = document.getElementById('debug-popup');
@@ -1457,6 +1489,7 @@
             clockTimer: null,
             matchNumber: 1
         };
+        const renjuRulesEnabled = true;
 
         function getChatInstanceInfo() {
             if (!window.webxdc) {
@@ -2619,10 +2652,14 @@
             difficultySelect.disabled = !isPve;
             difficultyControl.style.display = isPve ? '' : 'none';
             difficultySelect.hidden = !isPve;
+            if (difficultyRenjuHint) {
+                difficultyRenjuHint.hidden = !isPve || getSelectedDifficultyDepth() < 6;
+            }
         }
 
         if (difficultySelect) {
             difficultySelect.addEventListener('change', () => {
+                updateDifficultyControlVisibility();
                 debugLog('DIFFICULTY_CHANGED', {
                     depth: getSelectedDifficultyDepth(),
                     label: difficultySelect.options[difficultySelect.selectedIndex]?.textContent || null,
@@ -3912,6 +3949,15 @@
                 updateAllPlayersScoreboard();
             } else if (payload.action === 'MOVE') {
                 if (!isOnBoard(payload.r, payload.c) || !board.length) return;
+                const remoteFoul = getRenjuFoulInfo(board, payload.r, payload.c, payload.player);
+                if (remoteFoul) {
+                    debugLog('MOVE_IGNORED', {
+                        reason: 'remote-renju-foul',
+                        attemptedMove: { r: payload.r, c: payload.c, player: payload.player },
+                        foul: remoteFoul
+                    });
+                    return;
+                }
 
                 // In tournament mode, enforce addr-lock so only the first device per identity can play.
                 // Use the original payload.peerId (pre-canonicalization) so machine B is blocked even
@@ -4660,6 +4706,206 @@
         function isOnBoard(r, c) {
             return Number.isInteger(r) && r >= 0 && r < boardSize
                 && Number.isInteger(c) && c >= 0 && c < boardSize;
+        }
+
+        function getLineLengthOnBoard(stateBoard, r, c, player, dr, dc) {
+            let count = 1;
+            let nr = r + dr;
+            let nc = c + dc;
+            while (isOnBoard(nr, nc) && stateBoard[nr][nc] === player) {
+                count++;
+                nr += dr;
+                nc += dc;
+            }
+            nr = r - dr;
+            nc = c - dc;
+            while (isOnBoard(nr, nc) && stateBoard[nr][nc] === player) {
+                count++;
+                nr -= dr;
+                nc -= dc;
+            }
+            return count;
+        }
+
+        function getDirectionalSegment(stateBoard, row, col, dr, dc, radius = 4) {
+            const cells = [];
+            let centerIndex = 0;
+            for (let step = -radius; step <= radius; step++) {
+                if (step === 0) centerIndex = cells.length;
+                const rr = row + dr * step;
+                const cc = col + dc * step;
+                cells.push(isOnBoard(rr, cc) ? stateBoard[rr][cc] : null);
+            }
+            return { cells, centerIndex };
+        }
+
+        function collectThreatMatchesForPlacedStone(stateBoard, r, c, player) {
+            if (!isOnBoard(r, c) || stateBoard[r][c] !== player) {
+                return { openThrees: [], fours: [] };
+            }
+            const openThrees = [];
+            const foursByDirection = new Map();
+            const patterns = [
+                { length: 5, type: 'simple-four' },
+                { length: 6, type: 'open-four' },
+                { length: 6, type: 'open-three' }
+            ];
+
+            for (const [dr, dc] of [[0, 1], [1, 0], [1, 1], [1, -1]]) {
+                const segment = getDirectionalSegment(stateBoard, r, c, dr, dc, 4);
+                for (const pattern of patterns) {
+                    for (let start = 0; start <= segment.cells.length - pattern.length; start++) {
+                        const end = start + pattern.length;
+                        if (segment.centerIndex < start || segment.centerIndex >= end) continue;
+                        const window = segment.cells.slice(start, end);
+                        if (window.includes(null)) continue;
+                        if (window.some((value) => value !== 0 && value !== player)) continue;
+
+                        let threatType = null;
+                        const stones = window.filter((value) => value === player).length;
+                        const empties = [];
+                        for (let i = 0; i < window.length; i++) {
+                            if (window[i] === 0) empties.push(i);
+                        }
+
+                        if (pattern.length === 5 && stones === 4 && empties.length === 1) {
+                            threatType = 'simple-four';
+                        } else if (pattern.length === 6 && stones === 4 && empties.length === 2 && empties[0] === 0 && empties[1] === 5) {
+                            threatType = 'open-four';
+                        } else if (pattern.length === 6 && stones === 3 && empties.length === 3) {
+                            const inner = window.slice(1, 5);
+                            const innerStones = inner.filter((value) => value === player).length;
+                            const innerEmpties = inner.filter((value) => value === 0).length;
+                            if (window[0] === 0 && window[5] === 0 && innerStones === 3 && innerEmpties === 1 && inner[0] !== 0 && inner[3] !== 0) {
+                                threatType = 'open-three';
+                            }
+                        }
+
+                        if (!threatType) continue;
+                        if (threatType === 'open-three') {
+                            openThrees.push({ type: threatType, dr, dc, start });
+                            continue;
+                        }
+
+                        const completionSquares = [];
+                        for (const emptyIndex of empties) {
+                            const rr = r + dr * (start + emptyIndex - segment.centerIndex);
+                            const cc = c + dc * (start + emptyIndex - segment.centerIndex);
+                            if (!isOnBoard(rr, cc) || stateBoard[rr][cc] !== 0) continue;
+                            const nextBoard = cloneBoardState(stateBoard);
+                            nextBoard[rr][cc] = player;
+                            const nextLength = getLineLengthOnBoard(nextBoard, rr, cc, player, dr, dc);
+                            if (nextLength === 5) {
+                                completionSquares.push(`${rr},${cc}`);
+                            }
+                        }
+                        if (!completionSquares.length) continue;
+
+                        const directionKey = `${dr},${dc}`;
+                        const existing = foursByDirection.get(directionKey) || new Set();
+                        completionSquares.forEach((square) => existing.add(square));
+                        foursByDirection.set(directionKey, existing);
+                    }
+                }
+            }
+
+            const fours = Array.from(foursByDirection.entries()).map(([directionKey, completionSquares]) => ({
+                type: completionSquares.size >= 2 ? 'open-four' : 'simple-four',
+                directionKey,
+                completionSquares: Array.from(completionSquares)
+            }));
+
+            return { openThrees, fours };
+        }
+
+        function classifyThreatAtPosition(stateBoard, r, c, player) {
+            if (!isOnBoard(r, c) || stateBoard[r][c] !== 0) return { severity: 0, type: null };
+            const testBoard = cloneBoardState(stateBoard);
+            testBoard[r][c] = player;
+            let bestThreat = { severity: 0, type: null };
+            const directions = [[0, 1], [1, 0], [1, 1], [1, -1]];
+
+            for (const [dr, dc] of directions) {
+                const segment = getDirectionalSegment(testBoard, r, c, dr, dc, 4);
+
+                for (let start = 0; start <= segment.cells.length - 5; start++) {
+                    const end = start + 5;
+                    if (segment.centerIndex < start || segment.centerIndex >= end) continue;
+                    const window = segment.cells.slice(start, end);
+                    if (window.includes(null)) continue;
+                    if (window.some((value) => value !== 0 && value !== player)) continue;
+
+                    const stones = window.filter((value) => value === player).length;
+                    const empties = window.filter((value) => value === 0).length;
+                    if (stones === 5) bestThreat = { severity: 5, type: 'five' };
+                    else if (stones === 4 && empties === 1 && bestThreat.severity < 4) bestThreat = { severity: 4, type: 'simple-four' };
+                    else if (stones === 3 && empties === 2) {
+                        const firstEmpty = window.indexOf(0);
+                        const lastEmpty = window.lastIndexOf(0);
+                        const nextThreat = lastEmpty - firstEmpty === 4
+                            ? { severity: 3, type: 'open-three' }
+                            : { severity: 2, type: 'broken-three' };
+                        if (nextThreat.severity > bestThreat.severity) bestThreat = nextThreat;
+                    }
+                }
+
+                for (let start = 0; start <= segment.cells.length - 6; start++) {
+                    const end = start + 6;
+                    if (segment.centerIndex < start || segment.centerIndex >= end) continue;
+                    const window = segment.cells.slice(start, end);
+                    if (window.includes(null)) continue;
+                    if (window.some((value) => value !== 0 && value !== player)) continue;
+
+                    const stones = window.filter((value) => value === player).length;
+                    const empties = [];
+                    for (let i = 0; i < window.length; i++) {
+                        if (window[i] === 0) empties.push(i);
+                    }
+                    if (stones === 4 && empties.length === 2 && empties[0] === 0 && empties[1] === 5 && bestThreat.severity < 5) {
+                        bestThreat = { severity: 5, type: 'open-four' };
+                    } else if (stones === 3 && empties.length === 3) {
+                        const inner = window.slice(1, 5);
+                        const innerStones = inner.filter((value) => value === player).length;
+                        const innerEmpties = inner.filter((value) => value === 0).length;
+                        if (window[0] === 0 && window[5] === 0 && innerStones === 3 && innerEmpties === 1 && bestThreat.severity < 3) {
+                            bestThreat = { severity: 3, type: 'open-three' };
+                        } else if (innerStones === 3 && innerEmpties === 1 && bestThreat.severity < 2) {
+                            bestThreat = { severity: 2, type: 'broken-three' };
+                        }
+                    }
+                }
+            }
+
+            return bestThreat;
+        }
+
+        function getRenjuFoulInfo(stateBoard, r, c, player) {
+            if (!renjuRulesEnabled || player !== 1 || !isOnBoard(r, c)) return null;
+            const testBoard = cloneBoardState(stateBoard);
+            if (testBoard[r][c] === 0) {
+                testBoard[r][c] = player;
+            } else if (testBoard[r][c] !== player) {
+                return null;
+            }
+            const directions = [[0, 1], [1, 0], [1, 1], [1, -1]];
+            const lineLengths = directions.map(([dr, dc]) => getLineLengthOnBoard(testBoard, r, c, player, dr, dc));
+            const overline = lineLengths.some((length) => length > 5);
+            const threats = collectThreatMatchesForPlacedStone(testBoard, r, c, player);
+            const doubleThree = threats.openThrees.length >= 2;
+            const doubleFour = threats.fours.length >= 2;
+            if (!overline && !doubleThree && !doubleFour) return null;
+            return {
+                overline,
+                doubleThree,
+                doubleFour,
+                openThreeCount: threats.openThrees.length,
+                fourCount: threats.fours.length,
+                message: overline
+                    ? 'Renju foul: Black cannot make an overline.'
+                    : doubleThree
+                        ? 'Renju foul: Black cannot make a double-three.'
+                        : 'Renju foul: Black cannot make a double-four.'
+            };
         }
 
         function countMoves(boardState) {
@@ -5612,6 +5858,12 @@
             const c = parseInt(cell.dataset.col);
 
             if (isNaN(r) || isNaN(c) || board[r][c] !== 0) return; 
+            const foul = getRenjuFoulInfo(board, r, c, currentPlayer);
+            if (foul) {
+                alert(foul.message);
+                debugLog('MOVE_BLOCKED', { reason: 'renju-foul', currentPlayer, attemptedMove: { r, c }, foul });
+                return;
+            }
 
             if (gameModeSelect.value === 'pve' && isComputerPlayer(currentPlayer)) {
                 debugLog('MOVE_BLOCKED', {
@@ -6204,6 +6456,10 @@
 
         // --- Win Logic ---
         function checkWin(r, c, player) {
+            if (renjuRulesEnabled && player === 1) {
+                const foul = getRenjuFoulInfo(board, r, c, player);
+                if (foul && foul.overline) return false;
+            }
             const directions = [ [[0, 1], [0, -1]], [[1, 0], [-1, 0]], [[1, 1], [-1, -1]], [[1, -1], [-1, 1]] ];
             for (let dir of directions) {
                 let count = 1;

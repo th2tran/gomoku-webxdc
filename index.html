@@ -789,7 +789,41 @@
             font-size: 12px;
             line-height: 1.35;
             color: #d6e4f0;
-            min-height: 180px;
+            flex: 1;
+            min-height: 0;
+        }
+        .notifications-log .chat-line { color: #f1f6fb; }
+        .notifications-log .chat-line .chat-sender { color: #7fd1ff; font-weight: 600; }
+        .notifications-log .system-line { color: #9db3c8; font-style: italic; }
+        .chat-input-row {
+            display: flex;
+            gap: 8px;
+            padding: 10px 12px;
+            border-top: 1px solid #4a6075;
+            flex: 0 0 auto;
+        }
+        .chat-input-row input[type="text"] {
+            flex: 1;
+            min-width: 0;
+            padding: 8px 10px;
+            font-size: 13px;
+            border-radius: 6px;
+            border: 1px solid #4a6075;
+            background: #16212c;
+            color: #f1f6fb;
+        }
+        .chat-input-row button {
+            padding: 8px 14px;
+            font-size: 13px;
+            background: #3f8ae0;
+            border-radius: 6px;
+            border: none;
+            color: #fff;
+            cursor: pointer;
+        }
+        .chat-input-row button:disabled {
+            opacity: 0.5;
+            cursor: default;
         }
         .sgf-export-popup {
             display: none;
@@ -1248,16 +1282,20 @@
     <div class="notifications-popup" id="notifications-popup" aria-hidden="true">
         <div class="notifications-panel" id="notifications-panel">
             <div class="notifications-header" id="notifications-header">
-                <span>Notifications</span>
+                <span>Chat</span>
                 <div class="notifications-actions">
-                    <button id="notifications-toggle-btn" type="button" aria-label="Collapse notifications">▶</button>
+                    <button id="notifications-toggle-btn" type="button" aria-label="Collapse chat">▶</button>
                     <button id="notifications-clear-btn" type="button">Clear</button>
                 </div>
             </div>
             <pre class="notifications-log" id="notifications-log"></pre>
+            <div class="chat-input-row" id="chat-input-row">
+                <input id="chat-input" type="text" placeholder="Type a message…" autocomplete="off" maxlength="500">
+                <button id="chat-send-btn" type="button">Send</button>
+            </div>
         </div>
     </div>
-    <button class="notifications-tab" id="notifications-tab-btn" type="button" aria-label="Expand notifications">◀</button>
+    <button class="notifications-tab" id="notifications-tab-btn" type="button" aria-label="Expand chat">◀</button>
     <div class="sgf-export-popup" id="sgf-export-popup" aria-hidden="true">
         <div class="sgf-export-panel" role="dialog" aria-modal="true" aria-labelledby="sgf-export-title">
             <div class="sgf-export-header">
@@ -1355,6 +1393,8 @@
         const notificationsToggleBtn = document.getElementById('notifications-toggle-btn');
         const notificationsLogEl = document.getElementById('notifications-log');
         const notificationsClearBtn = document.getElementById('notifications-clear-btn');
+        const chatInput = document.getElementById('chat-input');
+        const chatSendBtn = document.getElementById('chat-send-btn');
         const sgfExportPopup = document.getElementById('sgf-export-popup');
         const sgfExportTextarea = document.getElementById('sgf-export-textarea');
         const sgfExportStatus = document.getElementById('sgf-export-status');
@@ -1394,7 +1434,11 @@
         let pveComputerPlayer = 2;
         let computerWorker = null;
         let computerMoveRequestToken = 0;
-        const playerStaleMs = 15000;
+        // 45s tolerates ~4 missed PRESENCE heartbeats (sent every 10s) before a peer is
+        // considered gone. Browsers throttle setInterval timers on backgrounded/inactive
+        // tabs, so a single delayed or dropped heartbeat is common and must not, by itself,
+        // cause a false "withdrew" eviction of a peer who is still actually present.
+        const playerStaleMs = 45000;
         const knownLeftPeers = new Set();
         // Old session peerIds that refer to us (collected from incoming PEER_LIST_SYNC entries
         // whose addr === myAddr but peerId !== myPeerId). Needed so we can recognise ourselves
@@ -1487,7 +1531,12 @@
             countdownDeadlineTs: null,
             countdownTimer: null,
             clockTimer: null,
-            matchNumber: 1
+            matchNumber: 1,
+            // Grace window (ms timestamp) after a new match starts during which the local
+            // peer-exit monitor won't evict/withdraw the opponent for being "stale". This
+            // gives both peers time to exchange a fresh PRESENCE/roster sync right after a
+            // match transition, before assuming silence means they left.
+            matchGraceUntilTs: null
         };
         const renjuRulesEnabled = true;
 
@@ -1570,12 +1619,12 @@
             notificationsPopup.setAttribute('aria-hidden', shouldBeMinimized ? 'true' : 'false');
             if (notificationsToggleBtn) {
                 notificationsToggleBtn.textContent = shouldBeMinimized ? '◀' : '▶';
-                notificationsToggleBtn.setAttribute('aria-label', shouldBeMinimized ? 'Expand notifications' : 'Collapse notifications');
+                notificationsToggleBtn.setAttribute('aria-label', shouldBeMinimized ? 'Expand chat' : 'Collapse chat');
             }
             if (notificationsTabBtn) {
                 notificationsTabBtn.textContent = '◀';
                 notificationsTabBtn.setAttribute('aria-hidden', shouldBeMinimized ? 'false' : 'true');
-                notificationsTabBtn.setAttribute('aria-label', shouldBeMinimized ? 'Expand notifications' : 'Collapse notifications');
+                notificationsTabBtn.setAttribute('aria-label', shouldBeMinimized ? 'Expand chat' : 'Collapse chat');
                 notificationsTabBtn.style.display = shouldBeMinimized ? 'block' : 'none';
                 notificationsTabBtn.style.top = `${notificationsTabTop}px`;
             }
@@ -1598,15 +1647,29 @@
             }
         }
 
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
         function renderNotifications() {
             if (!notificationsLogEl) return;
             if (!notifications.length) {
-                notificationsLogEl.textContent = '[No notifications yet]';
+                notificationsLogEl.textContent = '[No messages yet]';
                 return;
             }
-            notificationsLogEl.textContent = notifications
-                .map((entry) => `[${formatNotificationTimestamp(entry.at)}] ${entry.text}`)
-                .join('\n');
+            notificationsLogEl.innerHTML = notifications
+                .map((entry) => {
+                    const ts = formatNotificationTimestamp(entry.at);
+                    if (entry.kind === 'chat') {
+                        const senderName = escapeHtml(entry.sender || 'Player');
+                        return `<div class="chat-line">[${ts}] <span class="chat-sender">${senderName}:</span> ${escapeHtml(entry.text)}</div>`;
+                    }
+                    return `<div class="system-line">[${ts}] ${escapeHtml(entry.text)}</div>`;
+                })
+                .join('');
             notificationsLogEl.scrollTop = notificationsLogEl.scrollHeight;
         }
 
@@ -1900,10 +1963,7 @@
                 renderGameHistory();
                 sgfImportTextarea.value = '';
                 hideSgfImportPopup();
-                addNotification(`Imported SGF game with ${entry.moves.length} moves.`, {
-                    id: `sgf-import:${entry.id}`,
-                    at: Date.now()
-                });
+                debugLog('SGF_IMPORTED', { entryId: entry.id, moveCount: entry.moves.length });
             } catch (error) {
                 setSgfImportStatus(error instanceof Error ? error.message : 'Unable to import SGF.');
             }
@@ -2266,8 +2326,11 @@
             if (notificationIds.has(noteId)) return;
 
             const noteAt = Number.isFinite(options.at) ? options.at : Date.now();
+            const noteKind = options.kind === 'chat' ? 'chat' : 'system';
+            const noteSender = typeof options.sender === 'string' && options.sender.trim() ? options.sender.trim() : null;
+            const noteSenderPeerId = typeof options.senderPeerId === 'string' ? options.senderPeerId : null;
             notificationIds.add(noteId);
-            notifications.push({ id: noteId, at: noteAt, text: noteText });
+            notifications.push({ id: noteId, at: noteAt, text: noteText, kind: noteKind, sender: noteSender, senderPeerId: noteSenderPeerId });
             if (notifications.length > maxNotifications) {
                 const removed = notifications.shift();
                 if (removed?.id) notificationIds.delete(removed.id);
@@ -2280,11 +2343,30 @@
                     noteId,
                     noteText,
                     noteAt,
+                    noteKind,
+                    noteSender,
+                    noteSenderPeerId,
                     addr: myAddr,
                     name: myName,
                     peerId: myPeerId
-                }, noteText, `Gomoku notification`);
+                }, noteText, noteKind === 'chat' ? `Chat message` : `Gomoku notification`);
             }
+        }
+
+        function sendChatMessage() {
+            if (!chatInput) return;
+            const text = chatInput.value.trim();
+            if (!text) return;
+            addNotification(text, {
+                id: `chat:${myPeerId}:${Date.now()}:${++notificationSeq}`,
+                at: Date.now(),
+                kind: 'chat',
+                sender: cleanPlayerName(myName),
+                senderPeerId: myPeerId,
+                broadcast: true
+            });
+            chatInput.value = '';
+            chatInput.focus();
         }
 
         function cleanPlayerName(name) {
@@ -2983,11 +3065,7 @@
             if (!isTournamentClockExpired(Date.now())) return;
             if (!tournamentState.expiryNotified) {
                 tournamentState.expiryNotified = true;
-                addNotification('Tournament clock expired. Current match may finish, but its result will not count.', {
-                    id: `tournament-expired:${tournamentState.deadlineTs}`,
-                    at: Date.now(),
-                    broadcast: true
-                });
+                debugLog('TOURNAMENT_CLOCK_EXPIRED', { deadlineTs: tournamentState.deadlineTs });
             }
             if (gameOver || !networkPlayers[1] || !networkPlayers[2]) {
                 tournamentSingleRemainingConfirmation.pending = false;
@@ -3182,6 +3260,10 @@
                 }
                 const nextPair = tournamentState.pairings[tournamentState.pairIndex];
                 if (!nextPair || !nextPair[0] || !nextPair[1]) return;
+                // Grant a grace window before the exit monitor resumes evicting the newly
+                // active opponent — they need time to send a fresh PRESENCE after this
+                // transition, and stale eviction here would falsely report a withdrawal.
+                tournamentState.matchGraceUntilTs = Date.now() + 12000;
                 initBoard(false);
                 updateTournamentMatchState(tournamentState.pairIndex);
                 updateTurnIndicator();
@@ -3453,10 +3535,10 @@
             updateAllPlayersScoreboard();
             updateTurnIndicator();
 
-            addNotification(noteText || `${leaverName} left the game.`, {
-                id: leaveEventId || `leave-local:${peerId}`,
-                at: Date.now(),
-                broadcast: false
+            debugLog('PEER_LEFT_GAME', {
+                noteText: noteText || `${leaverName} left the game.`,
+                peerId,
+                leaveEventId: leaveEventId || `leave-local:${peerId}`
             });
             if (gameModeSelect.value === 'webxdc-tournament' && !tournamentState.finished) {
                 const shouldResyncRoster = source !== 'peer-list-prune';
@@ -3550,10 +3632,21 @@
                 // This gives every peer time to respond (PRESENCE/PEER_LIST_SYNC) after the
                 // reset so no one is falsely marked as stale/missing before they've had a
                 // chance to announce themselves. The countdown is typically 10 s — well within
-                // the normal 15 s stale threshold.
+                // the normal 45 s stale threshold.
                 if (gameModeSelect.value === 'webxdc-tournament'
                     && Number.isFinite(tournamentState.countdownDeadlineTs)
                     && now < tournamentState.countdownDeadlineTs) {
+                    return;
+                }
+
+                // Same idea, but for every subsequent match transition within an ongoing
+                // tournament (round-robin advance, etc.), which isn't covered by the initial
+                // countdown above. Without this, a peer whose PRESENCE simply hasn't arrived
+                // yet right after a match starts can be wrongly evicted/reported as having
+                // withdrawn even though they're still connected.
+                if (gameModeSelect.value === 'webxdc-tournament'
+                    && Number.isFinite(tournamentState.matchGraceUntilTs)
+                    && now < tournamentState.matchGraceUntilTs) {
                     return;
                 }
 
@@ -3836,12 +3929,10 @@
             if (shouldNotifyJoin && !shouldSilenceJoinAfterRosterSync) {
                 const joinDisplayName = cleanPlayerName(senderName || payload.name || 'Player');
                 const joinDedupeSource = senderAddr || senderPeerId || joinDisplayName.toLowerCase();
-                addNotification(`${joinDisplayName} joined the game.`, {
-                    id: `join-detected:${senderPeerId}:${payload.msgId || Date.now()}`,
-                    at: Date.now(),
-                    dedupeKey: `join:${joinDedupeSource}`,
-                    dedupeWindowMs: 10000,
-                    broadcast: false
+                debugLog('PEER_JOIN_DETECTED', {
+                    joinDisplayName,
+                    senderPeerId,
+                    dedupeKey: `join:${joinDedupeSource}`
                 });
                 for (const key of joinKeys) joinNotificationKeys.add(key);
                 recentJoinAtByIdentity.set(joinIdentity, Date.now());
@@ -3860,10 +3951,13 @@
 
             if (payload.action === 'NOTIFY') {
                 const noteText = typeof payload.noteText === 'string' ? payload.noteText.trim() : '';
-                if (/ joined the game\.$/i.test(noteText)) return;
+                if (payload.noteKind !== 'chat' && / joined the game\.$/i.test(noteText)) return;
                 addNotification(payload.noteText, {
                     id: payload.noteId,
                     at: payload.noteAt,
+                    kind: payload.noteKind === 'chat' ? 'chat' : 'system',
+                    sender: payload.noteSender || null,
+                    senderPeerId: payload.noteSenderPeerId || null,
                     broadcast: false
                 });
                 return;
@@ -4485,11 +4579,7 @@
             const rosterSummary = formatPeerRosterNames(peers.filter((peer) => peer.peerId !== myPeerId));
             sendXdcUpdate(payload, '', `${myName} synced the peer roster.`);
             if (rosterSummary) {
-                addNotification(`Peer roster synced: ${rosterSummary}.`, {
-                    id: `peer-sync-send:${myPeerId}:${reason}:${Date.now()}`,
-                    at: Date.now(),
-                    broadcast: false
-                });
+                debugLog('PEER_ROSTER_SYNCED', { reason, peers: rosterSummary });
             }
             debugLog('PEER_LIST_SYNC_SENT', { reason, count: payload.peers.length, peers: rosterSummary || 'none' });
         }
@@ -4624,10 +4714,11 @@
             }
             const rosterSummary = formatPeerRosterNames(peers.filter((peer) => peer.peerId !== myPeerId));
             if (rosterSummary) {
-                addNotification(`Peer roster synced from ${cleanPlayerName(payload?.name || sourcePeerId || 'peer')}: ${rosterSummary}.`, {
-                    id: `peer-sync-recv:${sourcePeerId || 'unknown'}:${payload?.reason || 'sync'}:${Date.now()}`,
-                    at: Date.now(),
-                    broadcast: false
+                debugLog('PEER_ROSTER_SYNCED_FROM_PEER', {
+                    sourceName: cleanPlayerName(payload?.name || sourcePeerId || 'peer'),
+                    sourcePeerId: sourcePeerId || null,
+                    reason: payload?.reason || 'sync',
+                    peers: rosterSummary
                 });
             }
             if (gameModeSelect.value === 'webxdc-tournament') {
@@ -5216,7 +5307,7 @@
                     p2Name: p2NameInput.value,
                     scores: { 1: scores[1], 2: scores[2] },
                     playerScores: { ...playerScoresByPeer },
-                    notifications: notifications.map((entry) => ({ id: entry.id, at: entry.at, text: entry.text })),
+                    notifications: notifications.map((entry) => ({ id: entry.id, at: entry.at, text: entry.text, kind: entry.kind, sender: entry.sender, senderPeerId: entry.senderPeerId })),
                     gameStartAnnounced,
                     gameOver,
                     moveCount: countMoves(board),
@@ -5393,6 +5484,9 @@
                     addNotification(note.text, {
                         id: note.id,
                         at: note.at,
+                        kind: note.kind === 'chat' ? 'chat' : 'system',
+                        sender: note.sender || null,
+                        senderPeerId: note.senderPeerId || null,
                         broadcast: false
                     });
                 }
@@ -5516,6 +5610,9 @@
                         return;
                     }
                     if (tournamentState.schedule.length) {
+                        // Same rationale as the round-robin advance grace window: give peers
+                        // time to send a fresh PRESENCE right as the first match begins.
+                        tournamentState.matchGraceUntilTs = Date.now() + 12000;
                         initBoard(false);
                         updateTournamentMatchState(tournamentState.pairIndex);
                         updateTurnIndicator();
@@ -5571,7 +5668,7 @@
             // Stamp all currently-connected players' lastSeen to now so the exit monitor
             // doesn't falsely evict players whose lastSeen is stale from a previous session.
             // This is critical when a player left+rejoined (getting a new random peerId) and
-            // was last seen >15s ago — without this reset they'd be ejected within 5s of the
+            // was last seen >45s ago — without this reset they'd be ejected within 5s of the
             // new tournament starting.
             const nowTs = Date.now();
             for (const peerId of Object.keys(connectedPlayers)) {
@@ -5621,7 +5718,7 @@
             }
 
             // Always announce presence — this refreshes lastSeen on all peers' devices for
-            // this peer, preventing the 15s stale-detection from prematurely ending matches
+            // this peer, preventing the stale-detection threshold from prematurely ending matches
             // in the new tournament. Use JOIN for the local initiator (shows notification),
             // PRESENCE for remote receivers (quiet ping that still updates lastSeen).
             if (window.webxdc && fromRemote === false && broadcast) {
@@ -6671,6 +6768,17 @@
             renderNotifications();
             debugLog('NOTIFICATIONS_CLEARED', {});
         });
+        if (chatSendBtn) {
+            chatSendBtn.addEventListener('click', () => sendChatMessage());
+        }
+        if (chatInput) {
+            chatInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    sendChatMessage();
+                }
+            });
+        }
         updateNotificationsPanelState();
 
         if (notificationsToggleBtn) {
@@ -6953,15 +7061,17 @@
         document.addEventListener('keydown', primeAudioContext, { once: true });
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'hidden') {
-                // Start a grace timer — if the player doesn't return within 8 s we assume
+                // Start a grace timer — if the player doesn't return within 30 s we assume
                 // the app was backgrounded-then-killed (common on mobile where pagehide /
                 // beforeunload never fire). Sending LEAVE now lets peers know quickly
-                // instead of waiting for stale detection (~15-20 s).
+                // instead of waiting for the (now 45s) stale-peer detection. 30s gives enough
+                // slack for brief app-switches, screen locks, or notification banners
+                // without falsely reporting an active player as having withdrawn.
                 if (window.webxdc) {
                     clearTimeout(hiddenLeaveTimer);
                     hiddenLeaveTimer = setTimeout(() => {
                         broadcastLocalLeave('visibility-hidden-timeout');
-                    }, 8000);
+                    }, 30000);
                 }
             } else if (document.visibilityState === 'visible') {
                 // Player returned — cancel the grace timer and re-announce presence.

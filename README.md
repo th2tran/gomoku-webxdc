@@ -10,7 +10,7 @@ Gomoku WebXDC is a browser-based Gomoku (Five in a Row) game packaged as a WebXD
 - Network mode for two players over WebXDC
 - Tournament mode with paired rounds and standings
 - Move timer for timed network turns
-- Notifications and status updates for join/leave events
+- In-app chat panel for messaging peers, plus status updates for join/leave events
 - Scoreboard tracking by connected peer
 - Reset and synchronization helpers for multiplayer matches
 

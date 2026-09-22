@@ -580,6 +580,18 @@
                 radial-gradient(circle at 36% 34%, #ffffff 0%, #f4f4f4 42%, #dedede 74%, #c8c8c8 100%);
             border: 1px solid rgba(0,0,0,0.18);
         }
+        .piece.last-move::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 18%;
+            aspect-ratio: 1;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+        }
+        .piece.black.last-move::after { background: #fff; }
+        .piece.white.last-move::after { background: #000; }
 
         .controls {
             margin-top: 20px;
@@ -671,6 +683,9 @@
             padding: 6px 10px;
             font-size: 13px;
             background: #52677d;
+        }
+        .debug-panel-actions button[aria-pressed="true"] {
+            background: #c0392b;
         }
         .debug-search-row {
             display: flex;
@@ -1268,6 +1283,8 @@
             <div class="debug-panel-header" id="debug-panel-header">
                 <span>Gomoku Debug Logs</span>
                 <div class="debug-panel-actions">
+                    <button id="debug-pause-btn" type="button" aria-pressed="false">Pause</button>
+                    <button id="debug-select-all-btn" type="button">Select All</button>
                     <button id="debug-clear-btn" type="button">Clear</button>
                     <button id="debug-close-btn" type="button">Close</button>
                 </div>
@@ -1386,6 +1403,8 @@
         const debugLogEl = document.getElementById('debug-log');
         const debugCloseBtn = document.getElementById('debug-close-btn');
         const debugClearBtn = document.getElementById('debug-clear-btn');
+        const debugPauseBtn = document.getElementById('debug-pause-btn');
+        const debugSelectAllBtn = document.getElementById('debug-select-all-btn');
         const notificationsPopup = document.getElementById('notifications-popup');
         const notificationsPanel = document.getElementById('notifications-panel');
         const notificationsHeader = document.getElementById('notifications-header');
@@ -1413,7 +1432,9 @@
         const maxNotifications = 200;
         const recentJoinAtByIdentity = new Map();
         let debugSearchQuery = '';
+        let debugLoggingPaused = false;
         let presenceSyncTimer = null;
+        let lastPresenceSentAt = 0;
         let playerExitMonitorTimer = null;
         let remoteUpdateSeen = false;
         let debugDragState = null;
@@ -1434,17 +1455,26 @@
         let pveComputerPlayer = 2;
         let computerWorker = null;
         let computerMoveRequestToken = 0;
-        // 45s tolerates ~4 missed PRESENCE heartbeats (sent every 10s) before a peer is
-        // considered gone. Browsers throttle setInterval timers on backgrounded/inactive
-        // tabs, so a single delayed or dropped heartbeat is common and must not, by itself,
-        // cause a false "withdrew" eviction of a peer who is still actually present.
-        const playerStaleMs = 45000;
+        // Browsers throttle setInterval/setTimeout timers on backgrounded/inactive tabs —
+        // Chrome, for example, clamps hidden-tab timers to roughly once per minute (and can
+        // go further with "intensive throttling" after ~5 minutes hidden). A peer who is
+        // simply not the focused/foreground tab (alt-tabbed, second monitor, minimized,
+        // screen-locked, etc.) will keep sending PRESENCE — just delayed/batched by the
+        // browser rather than every 10s. Observed real-world gaps of 45-60+ seconds between
+        // otherwise-healthy heartbeats mean the old 45s threshold left almost no margin and
+        // caused peers who never actually left to be evicted and charged with a withdrawal.
+        // 120s comfortably survives a couple of throttled/batched cycles while still
+        // detecting genuinely disconnected peers in a reasonable time; real intentional
+        // quits are still reported immediately via the explicit LEAVE broadcast, so this
+        // timeout only matters for peers who go silent without ever announcing a leave.
+        const playerStaleMs = 120000;
         const knownLeftPeers = new Set();
         // Old session peerIds that refer to us (collected from incoming PEER_LIST_SYNC entries
         // whose addr === myAddr but peerId !== myPeerId). Needed so we can recognise ourselves
         // in tournament schedules built by peers who still remember our previous canonical ID.
         const selfAliases = new Set();
         const canonicalPeerIdByAddr = new Map();
+        const missingPeerSinceById = new Map();
         let localLeaveBroadcastSent = false;
         let tournamentResetPendingTimer = null;
         const debugTitleTapTimes = [];
@@ -1454,6 +1484,7 @@
         let historyReplayState = null;
         let historyReplayTimer = null;
         let currentGameMoveLog = [];
+        let lastPlacedMove = null;
         let turnDeadlineTs = null;
         let playerDeadlineTs = { 1: null, 2: null };
         let playerRemainingMs = { 1: moveTimeLimitMs, 2: moveTimeLimitMs };
@@ -1595,6 +1626,7 @@
         }
 
         function debugLog(eventName, payload = {}) {
+            if (debugLoggingPaused) return;
             const timestamp = new Date().toISOString().split('T')[1].replace('Z', '');
             const line = `[${timestamp}] ${eventName} ${stringifyDebugValue(payload)}`;
             debugEntries.push(line);
@@ -1602,6 +1634,13 @@
             renderDebugLog();
 
             console.log('[GomokuDebug]', eventName, payload);
+        }
+
+        function updateDebugPauseButton() {
+            if (!debugPauseBtn) return;
+            debugPauseBtn.textContent = debugLoggingPaused ? 'Resume' : 'Pause';
+            debugPauseBtn.setAttribute('aria-pressed', String(debugLoggingPaused));
+            debugPauseBtn.setAttribute('aria-label', debugLoggingPaused ? 'Resume debug logging' : 'Pause debug logging');
         }
 
         function updateSidePanelLayoutClass() {
@@ -2238,6 +2277,9 @@
                     board[move.r][move.c] = move.player;
                 }
             }
+            lastPlacedMove = historyReplayState.index > 0
+                ? historyReplayState.moves[historyReplayState.index - 1]
+                : null;
             renderBoardFromState();
         }
 
@@ -2248,6 +2290,7 @@
             historyReplayState.index = clamped;
             if (clamped >= total && Array.isArray(historyReplayState.boardSnapshot)) {
                 board = cloneBoardState(historyReplayState.boardSnapshot);
+                lastPlacedMove = total ? historyReplayState.moves[total - 1] : null;
                 renderBoardFromState();
                 gameOver = true;
             } else {
@@ -2433,7 +2476,6 @@
             if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
             announcePresence('PRESENCE');
             presenceSyncTimer = setInterval(() => {
-                if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
                 announcePresence('PRESENCE');
             }, 10000);
             debugLog('PRESENCE_SYNC_STARTED', { intervalMs: 10000 });
@@ -2996,13 +3038,10 @@
                 tournamentState.lastMatchKey = matchKey;
             }
             if (peerRepresentsLocalPlayer(networkPlayers[1]) || peerRepresentsLocalPlayer(networkPlayers[2])) {
-                const isMyTurn = peerRepresentsLocalPlayer(networkPlayers[1]);
                 if (isNewMatch) {
                     addNotification(
-                        isMyTurn
-                            ? `Tournament match started: ${displayNameForPeer(networkPlayers[1])} vs ${displayNameForPeer(networkPlayers[2])}. It is your turn to make the first move.`
-                            : `Tournament match started: ${displayNameForPeer(networkPlayers[1])} vs ${displayNameForPeer(networkPlayers[2])}. Waiting for your opponent's first move.`,
-                        { id: `tournament-turn:${matchKey}`, at: Date.now(), broadcast: false }
+                        `Tournament match started: ${displayNameForPeer(networkPlayers[1])} vs ${displayNameForPeer(networkPlayers[2])}. It is ${displayNameForPeer(networkPlayers[currentPlayer])}'s turn to make the first move.`,
+                        { id: `tournament-turn:${matchKey}`, at: Date.now(), broadcast: true }
                     );
                 }
             }
@@ -3495,6 +3534,7 @@
             const leaverAddr = connectedPlayers[peerId]?.addr || null;
             const canonicalPeerId = getCanonicalPeerId(peerId, leaverAddr) || peerId;
             const peerIdsToRemove = new Set([peerId, canonicalPeerId].filter(Boolean));
+            knownLeftPeers.add(canonicalPeerId);
             if (leaverAddr) {
                 const normAddr = normalizeAddr(leaverAddr);
                 if (normAddr) {
@@ -3509,6 +3549,7 @@
                 if (!candidatePeerId || candidatePeerId === myPeerId) continue;
                 delete connectedPlayers[candidatePeerId];
                 delete playerScoresByPeer[candidatePeerId];
+                missingPeerSinceById.delete(candidatePeerId);
                 joinNotificationKeys.delete(`peer:${candidatePeerId}`);
                 if (leaverAddr) joinNotificationKeys.delete(`addr:${normalizeAddr(leaverAddr)}`);
             }
@@ -3632,7 +3673,7 @@
                 // This gives every peer time to respond (PRESENCE/PEER_LIST_SYNC) after the
                 // reset so no one is falsely marked as stale/missing before they've had a
                 // chance to announce themselves. The countdown is typically 10 s — well within
-                // the normal 45 s stale threshold.
+                // the normal 120 s stale threshold.
                 if (gameModeSelect.value === 'webxdc-tournament'
                     && Number.isFinite(tournamentState.countdownDeadlineTs)
                     && now < tournamentState.countdownDeadlineTs) {
@@ -3657,15 +3698,27 @@
                     const activeRecord = connectedPlayers[activePeerId];
                     const activeLastSeen = activeRecord?.lastSeen;
                     const activePeerIsMissing = !activeRecord || !Number.isFinite(activeLastSeen);
+                    if (activePeerIsMissing && !missingPeerSinceById.has(activePeerId)) {
+                        missingPeerSinceById.set(activePeerId, now);
+                        requestPeerListSync('active-peer-missing');
+                    } else if (!activePeerIsMissing) {
+                        missingPeerSinceById.delete(activePeerId);
+                    }
+                    const activePeerMissingSince = missingPeerSinceById.get(activePeerId);
+                    const activePeerMissingTooLong = activePeerIsMissing
+                        && Number.isFinite(activePeerMissingSince)
+                        && now - activePeerMissingSince > playerStaleMs;
                     const activePeerIsStale = Number.isFinite(activeLastSeen) && now - activeLastSeen > playerStaleMs;
-                    if (activePeerIsMissing || activePeerIsStale) {
+                    if (activePeerMissingTooLong || activePeerIsStale) {
                         const localWinnerPeerId = myPeerId;
                         const leaverName = displayNameForPeer(activePeerId);
+                        const leaverAddr = getAddrForPeer(activePeerId);
                         applyPeerLeft(activePeerId, 'local-detection', `leave:${activePeerId}:${Date.now()}`, `${leaverName} left the game.`);
                         applyWithdrawalResult(activePeerId, localWinnerPeerId, 'local-detection');
                         sendXdcUpdate({
                             action: 'LEAVE',
                             leftPeerId: activePeerId,
+                            leftAddr: leaverAddr,
                             winnerPeerId: localWinnerPeerId,
                             isWithdrawal: true,
                             noteText: `${leaverName} left the game.`,
@@ -3689,11 +3742,13 @@
                 for (const stalePeer of stalePeers) {
                     const leaveEventId = `leave:${stalePeer}:${Date.now()}`;
                     const leaverName = displayNameForPeer(stalePeer);
+                    const leaverAddr = getAddrForPeer(stalePeer);
                     applyPeerLeft(stalePeer, 'local-detection', leaveEventId, `${leaverName} left the game.`);
 
                     sendXdcUpdate({
                         action: 'LEAVE',
                         leftPeerId: stalePeer,
+                        leftAddr: leaverAddr,
                         leaveEventId,
                         noteText: `${leaverName} left the game.`,
                         addr: myAddr,
@@ -3710,6 +3765,7 @@
                             sendXdcUpdate({
                                 action: 'LEAVE',
                                 leftPeerId: stalePeer,
+                                leftAddr: leaverAddr,
                                 winnerPeerId,
                                 isWithdrawal: true,
                                 noteText: `${displayNameForPeer(stalePeer)} left the game.`,
@@ -3736,6 +3792,7 @@
             sendXdcUpdate({
                 action: 'LEAVE',
                 leftPeerId: myPeerId,
+                leftAddr: myAddr,
                 leaveEventId,
                 noteText,
                 winnerPeerId: (() => {
@@ -3853,6 +3910,14 @@
             });
         }
 
+        function getReportedLeaverAddr(payload, leftPeerId, senderPeerId, senderAddr) {
+            const rawSenderPeerId = typeof payload?.peerId === 'string' ? payload.peerId : senderPeerId;
+            const isSelfReportedLeave = !!leftPeerId
+                && (leftPeerId === rawSenderPeerId || leftPeerId === senderPeerId);
+            return normalizeAddr(payload?.leftAddr)
+                || (isSelfReportedLeave ? normalizeAddr(payload?.addr || senderAddr) : null);
+        }
+
         function handleIncomingPayload(payload, meta = {}) {
             if (!payload) {
                 debugLog('UPDATE_SKIPPED', { reason: 'missing payload', source: meta.source || 'unknown' });
@@ -3907,12 +3972,26 @@
                 rawUnderscoreSender: rawUpdate._sender || null
             });
 
+            const isLiveRejoinAnnouncement = isLive
+                && (payload.action === 'JOIN' || payload.action === 'PRESENCE');
+            if (senderPeerId && knownLeftPeers.has(senderPeerId) && !isLiveRejoinAnnouncement) {
+                debugLog('UPDATE_IGNORED_FROM_LEFT_PEER', {
+                    action: payload.action || null,
+                    senderPeerId,
+                    msgId: payload.msgId || null
+                });
+                return;
+            }
+
             // Don't call rememberConnectedPlayer for LEAVE messages — doing so would refresh
             // the leaver's lastSeen timestamp RIGHT BEFORE applyPeerLeft tries to evict them,
             // which would reset stale detection and cause a 25s delay before the peer is
             // actually removed if the canonical-ID resolution below fails.
             if (senderPeerId && payload.action !== 'LEAVE') {
-                rememberConnectedPlayer(senderPeerId, senderName, senderAddr, { isLive });
+                rememberConnectedPlayer(senderPeerId, senderName, senderAddr, {
+                    isLive,
+                    allowRejoin: isLiveRejoinAnnouncement
+                });
             }
             const isRosterSyncAction = payload.action === 'PEER_LIST_REQUEST' || payload.action === 'PEER_LIST_SYNC';
             const shouldNotifyJoin = (
@@ -3967,8 +4046,11 @@
                 // payload.leftPeerId is the leaver's CURRENT random session ID, but they may
                 // be stored under an OLD canonical ID (from a previous session). Resolve to
                 // canonical so connectedPlayers / networkPlayers are actually cleared.
-                const leaveAddr = normalizeAddr(payload.addr || senderAddr);
-                const canonicalLeftPeerId = getCanonicalPeerId(payload.leftPeerId || payload.quitterPeerId || senderPeerId, leaveAddr)
+                const rawLeftPeerId = payload.leftPeerId || payload.quitterPeerId || senderPeerId;
+                // `addr` identifies the reporter. Only use it for a self-reported leave;
+                // proxy leave reports must provide `leftAddr` or resolve by leftPeerId alone.
+                const leaveAddr = getReportedLeaverAddr(payload, rawLeftPeerId, senderPeerId, senderAddr);
+                const canonicalLeftPeerId = getCanonicalPeerId(rawLeftPeerId, leaveAddr)
                     || (typeof payload.leftPeerId === 'string' ? payload.leftPeerId : null)
                     || senderPeerId;
                 const leaveWinnerPeerId = typeof payload.winnerPeerId === 'string' ? payload.winnerPeerId : null;
@@ -4099,8 +4181,9 @@
             } else if (payload.action === 'WITHDRAWAL') {
                 // Legacy compatibility: old clients still send WITHDRAWAL. Treat it as a LEAVE
                 // that is only active when the peer was participating in the current game.
-                const withdrawalAddr = normalizeAddr(payload.addr || senderAddr);
-                const canonicalQuitter = getCanonicalPeerId(payload.quitterPeerId || payload.leftPeerId || senderPeerId, withdrawalAddr)
+                const rawQuitterPeerId = payload.quitterPeerId || payload.leftPeerId || senderPeerId;
+                const withdrawalAddr = getReportedLeaverAddr(payload, rawQuitterPeerId, senderPeerId, senderAddr);
+                const canonicalQuitter = getCanonicalPeerId(rawQuitterPeerId, withdrawalAddr)
                     || (typeof payload.quitterPeerId === 'string' ? payload.quitterPeerId : null)
                     || senderPeerId;
                 const canonicalWinner = getCanonicalPeerId(payload.winnerPeerId || payload.leftPeerId || null, null) || payload.winnerPeerId || null;
@@ -4290,6 +4373,14 @@
                 debugLog('CONNECTED_PLAYER_SKIPPED', { reason: 'missing canonical peer', peerId, name: name || null, addr: normalizedAddr || null });
                 return;
             }
+            if (knownLeftPeers.has(canonicalPeerId) && !options.allowRejoin) {
+                debugLog('CONNECTED_PLAYER_SKIPPED', {
+                    reason: 'peer-left-without-live-rejoin',
+                    peerId: canonicalPeerId,
+                    addr: normalizedAddr || null
+                });
+                return;
+            }
             if (normalizedAddr) {
                 canonicalPeerIdByAddr.set(normalizedAddr, canonicalPeerId);
             }
@@ -4325,7 +4416,8 @@
 
             const existingEntry = connectedPlayers[canonicalPeerId] || {};
             const wasKnown = !!connectedPlayers[canonicalPeerId];
-            if (!wasKnown) knownLeftPeers.delete(canonicalPeerId);
+            if (!wasKnown && options.allowRejoin) knownLeftPeers.delete(canonicalPeerId);
+            missingPeerSinceById.delete(canonicalPeerId);
             connectedPlayers[canonicalPeerId] = {
                 addr: normalizedAddr || existingEntry.addr || null,
                 name: name || existingEntry.name || 'Player',
@@ -4748,6 +4840,7 @@
         function announcePresence(action = 'JOIN') {
             if (!window.webxdc) return;
 
+            lastPresenceSentAt = Date.now();
             rememberConnectedPlayer(myPeerId, myName, myAddr);
 
             const update = { payload: { action: action, addr: myAddr, name: myName, peerId: myPeerId } };
@@ -4757,7 +4850,7 @@
                 info = `${myName} joined the Gomoku game.`;
                 summary = `${myName} joined the Gomoku game.`;
             }
-            debugLog('PRESENCE_ANNOUNCE', {
+            debugLog('Announcing PRESENCE', {
                 action,
                 peerId: myPeerId,
                 addr: myAddr,
@@ -5114,6 +5207,9 @@
                     if (player !== 1 && player !== 2) continue;
                     const piece = document.createElement('div');
                     piece.classList.add('piece', player === 1 ? 'black' : 'white');
+                    if (lastPlacedMove?.r === r && lastPlacedMove?.c === c && lastPlacedMove?.player === player) {
+                        piece.classList.add('last-move');
+                    }
                     const cell = document.querySelector(`.cell[data-row="${r}"][data-col="${c}"]`);
                     if (cell) cell.appendChild(piece);
                 }
@@ -5303,6 +5399,10 @@
                     board: board.map((row) => row.slice()),
                     currentPlayer,
                     networkPlayers: { 1: networkPlayers[1], 2: networkPlayers[2] },
+                    networkPlayerAddrs: {
+                        1: getAddrForPeer(networkPlayers[1]),
+                        2: getAddrForPeer(networkPlayers[2])
+                    },
                     p1Name: p1NameInput.value,
                     p2Name: p2NameInput.value,
                     scores: { 1: scores[1], 2: scores[2] },
@@ -5311,6 +5411,9 @@
                     gameStartAnnounced,
                     gameOver,
                     moveCount: countMoves(board),
+                    lastMove: lastPlacedMove
+                        ? { r: lastPlacedMove.r, c: lastPlacedMove.c, player: lastPlacedMove.player }
+                        : null,
                     turnDeadlineTs,
                     playerDeadlineTs: { 1: playerDeadlineTs[1], 2: playerDeadlineTs[2] },
                     gameMode: gameModeSelect.value,
@@ -5359,6 +5462,19 @@
             board = normalizedBoard;
             currentPlayer = state.currentPlayer === 2 ? 2 : 1;
             gameOver = !!state.gameOver;
+            const incomingLastMove = state.lastMove;
+            if (isOnBoard(incomingLastMove?.r, incomingLastMove?.c)
+                && (incomingLastMove.player === 1 || incomingLastMove.player === 2)
+                && board[incomingLastMove.r][incomingLastMove.c] === incomingLastMove.player) {
+                lastPlacedMove = {
+                    r: incomingLastMove.r,
+                    c: incomingLastMove.c,
+                    player: incomingLastMove.player
+                };
+            } else if (!lastPlacedMove
+                || board[lastPlacedMove.r]?.[lastPlacedMove.c] !== lastPlacedMove.player) {
+                lastPlacedMove = null;
+            }
             turnDeadlineTs = Number.isFinite(state.turnDeadlineTs) ? state.turnDeadlineTs : null;
             if (state.playerDeadlineTs && typeof state.playerDeadlineTs === 'object') {
                 playerDeadlineTs = {
@@ -5372,9 +5488,17 @@
             // Merge incoming networkPlayers: prefer non-null incoming value, but keep existing
             // non-null slot if the incoming STATE has null (e.g. first-mover's STATE sent before
             // second player claimed a seat). Overwriting with null triggers unwanted re-randomization.
-            const incomingNP = {
+            const incomingRawNP = {
                 1: typeof state.networkPlayers?.[1] === 'string' ? state.networkPlayers[1] : null,
                 2: typeof state.networkPlayers?.[2] === 'string' ? state.networkPlayers[2] : null
+            };
+            const incomingNP = {
+                1: incomingRawNP[1]
+                    ? getCanonicalPeerId(incomingRawNP[1], normalizeAddr(state.networkPlayerAddrs?.[1]))
+                    : null,
+                2: incomingRawNP[2]
+                    ? getCanonicalPeerId(incomingRawNP[2], normalizeAddr(state.networkPlayerAddrs?.[2]))
+                    : null
             };
             const livePeerIds = new Set(
                 [myPeerId, ...Object.keys(connectedPlayers)]
@@ -5668,7 +5792,7 @@
             // Stamp all currently-connected players' lastSeen to now so the exit monitor
             // doesn't falsely evict players whose lastSeen is stale from a previous session.
             // This is critical when a player left+rejoined (getting a new random peerId) and
-            // was last seen >45s ago — without this reset they'd be ejected within 5s of the
+            // was last seen >120s ago — without this reset they'd be ejected within 5s of the
             // new tournament starting.
             const nowTs = Date.now();
             for (const peerId of Object.keys(connectedPlayers)) {
@@ -5820,6 +5944,7 @@
             boardElement.innerHTML = '';
             board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
             currentGameMoveLog = [];
+            lastPlacedMove = null;
             renderMoveList([]);
             gameOver = false;
             currentPlayer = 1;
@@ -6133,8 +6258,10 @@
                 highlightMoveListItem(currentGameMoveLog.length);
             }
             board[r][c] = playedBy;
+            lastPlacedMove = { r, c, player: playedBy };
+            document.querySelectorAll('.cell .piece.last-move').forEach((piece) => piece.classList.remove('last-move'));
             const piece = document.createElement('div');
-            piece.classList.add('piece', playedBy === 1 ? 'black' : 'white');
+            piece.classList.add('piece', playedBy === 1 ? 'black' : 'white', 'last-move');
             
             const cell = document.querySelector(`.cell[data-row="${r}"][data-col="${c}"]`);
             cell.appendChild(piece);
@@ -6758,6 +6885,18 @@
             renderDebugLog();
         });
         debugCloseBtn.addEventListener('click', hideDebugPanel);
+        debugPauseBtn.addEventListener('click', () => {
+            debugLoggingPaused = !debugLoggingPaused;
+            updateDebugPauseButton();
+        });
+        debugSelectAllBtn.addEventListener('click', () => {
+            const selection = window.getSelection();
+            if (!selection || !debugLogEl) return;
+            const range = document.createRange();
+            range.selectNodeContents(debugLogEl);
+            selection.removeAllRanges();
+            selection.addRange(range);
+        });
         debugClearBtn.addEventListener('click', () => {
             debugEntries.length = 0;
             debugLog('DEBUG_LOG_CLEARED', {});
@@ -7059,19 +7198,52 @@
         window.addEventListener('unload', () => triggerLocalLeave('unload'));
         document.addEventListener('pointerdown', primeAudioContext, { once: true, passive: true });
         document.addEventListener('keydown', primeAudioContext, { once: true });
+        // Presence heartbeats fire every 10 s (see startPresenceSync). If those heartbeats
+        // are still going out while the tab is hidden, the page hasn't actually been
+        // suspended/killed by the OS — it's just unfocused/backgrounded (app switch, screen
+        // lock, notification banner, etc.), so we must NOT treat that as a real departure.
+        // Only fire the self-leave once heartbeats have genuinely stopped, which is what
+        // actually happens when the OS suspends or kills the backgrounded page.
+        //
+        // Background tabs get their own timers throttled/delayed by the browser/OS (Chrome
+        // clamps hidden-tab timers to ~once/minute, more aggressively after ~5 minutes
+        // hidden), so both the 10s presence heartbeat and this recheck can drift by a
+        // minute or more purely from scheduling — that drift must not be mistaken for the
+        // peer actually going stale. Reuse the same generous margin as the receiver-side
+        // stale-peer detection (playerStaleMs) so a peer's own self-assessment never
+        // fires earlier/stricter than what the opponent would tolerate, and recheck
+        // reasonably often so a single delayed heartbeat can never tip the decision.
+        const presenceHeartbeatIntervalMs = 10000;
+        const hiddenLeaveRecheckIntervalMs = 10000;
+        const heartbeatStaleThresholdMs = playerStaleMs;
+        const checkHiddenLeave = () => {
+            if (document.visibilityState !== 'hidden') return;
+            const heartbeatAge = Date.now() - lastPresenceSentAt;
+            if (heartbeatAge < heartbeatStaleThresholdMs) {
+                // Heartbeats are still flowing (allowing for scheduling jitter/throttling) —
+                // the page is alive, just not focused. Defer and re-check again shortly
+                // instead of leaving now.
+                debugLog('HIDDEN_LEAVE_DEFERRED', { heartbeatAge });
+                hiddenLeaveTimer = setTimeout(checkHiddenLeave, hiddenLeaveRecheckIntervalMs);
+                return;
+            }
+            // Heartbeats have actually stopped for a while — the page is genuinely
+            // suspended/killed (or its network/timers stopped working), so report LEAVE.
+            broadcastLocalLeave('visibility-hidden-timeout');
+        };
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'hidden') {
-                // Start a grace timer — if the player doesn't return within 30 s we assume
-                // the app was backgrounded-then-killed (common on mobile where pagehide /
-                // beforeunload never fire). Sending LEAVE now lets peers know quickly
-                // instead of waiting for the (now 45s) stale-peer detection. 30s gives enough
-                // slack for brief app-switches, screen locks, or notification banners
-                // without falsely reporting an active player as having withdrawn.
+                // Start a grace timer — if heartbeats stop while the player doesn't return
+                // within the grace period, we assume the app was backgrounded-then-killed
+                // (common on mobile where pagehide / beforeunload never fire). Sending LEAVE
+                // then lets peers know quickly instead of waiting for the (now 120s)
+                // stale-peer detection. The initial 30s delay gives enough slack for brief
+                // app-switches, screen locks, or notification banners, and the recurring
+                // heartbeat check above ensures we don't falsely report an active player
+                // (whose presence pings are still arriving) as having withdrawn.
                 if (window.webxdc) {
                     clearTimeout(hiddenLeaveTimer);
-                    hiddenLeaveTimer = setTimeout(() => {
-                        broadcastLocalLeave('visibility-hidden-timeout');
-                    }, 30000);
+                    hiddenLeaveTimer = setTimeout(checkHiddenLeave, 30000);
                 }
             } else if (document.visibilityState === 'visible') {
                 // Player returned — cancel the grace timer and re-announce presence.

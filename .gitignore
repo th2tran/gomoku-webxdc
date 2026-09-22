@@ -2473,3 +2473,5 @@
 /node_modules/zip-stream/package.json
 /node_modules/zip-stream/README.md
 /node_modules/.package-lock.json
+/dist/
+/node_modules/

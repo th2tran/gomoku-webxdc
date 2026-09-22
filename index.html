@@ -363,13 +363,14 @@
         .board-area {
             display: flex;
             flex-direction: row;
-            align-items: flex-start;
+            align-items: center;
             justify-content: center;
             gap: 16px;
             width: 100%;
             max-width: 900px;
             flex: 1;
             min-height: 0;
+            overflow: hidden;
         }
 
         .move-list-stack {
@@ -463,7 +464,7 @@
             display: grid;
             grid-template-columns: repeat(15, minmax(0, 1fr));
             grid-template-rows: repeat(15, minmax(0, 1fr));
-            width: min(100%, 620px);
+            width: min(100%, 620px, var(--board-max-square, 620px));
             aspect-ratio: 1;
             padding: var(--board-edge);
             box-sizing: border-box;
@@ -1174,7 +1175,9 @@
                 <div class="game-history-header">
                     <h3>Game History</h3>
                     <div class="game-history-header-actions">
-                        <button type="button" class="game-history-import-btn" id="game-history-import-btn" title="Import game history from SGF" aria-label="Import game history from SGF"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="m480-280 160-160-56-56-64 62v-166h-80v166l-64-62-56 56 160 160ZM240-80q-33 0-56.5-23.5T160-160v-480l240-240h320q33 0 56.5 23.5T800-800v640q0 33-23.5 56.5T720-80H240Zm0-80h480v-640H434L240-606v446Zm0 0h480-480Z"/></svg></button>
+                        <button type="button" class="game-history-import-btn" id="game-import-btn" title="Import a game from SGF" aria-label="Import a game from SGF"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="m480-280 160-160-56-56-64 62v-166h-80v166l-64-62-56 56 160 160ZM240-80q-33 0-56.5-23.5T160-160v-480l240-240h320q33 0 56.5 23.5T800-800v640q0 33-23.5 56.5T720-80H240Zm0-80h480v-640H434L240-606v446Zm0 0h480-480Z"/></svg></button>
+                        <button type="button" class="game-history-import-btn" id="game-history-backup-btn" title="Back up all game history" aria-label="Back up all game history"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M440-320v-286L336-502l-56-58 200-200 200 200-56 58-104-104v286h-80ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></svg></button>
+                        <button type="button" class="game-history-import-btn" id="game-history-restore-btn" title="Restore game history from a backup" aria-label="Restore game history from a backup"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M480-320 280-520l56-58 104 104v-286h80v286l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></svg></button>
                         <button type="button" class="game-history-clear-btn" id="game-history-clear-btn" title="Clear all game history" aria-label="Clear all game history"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M120-280v-80h560v80H120Zm80-160v-80h560v80H200Zm80-160v-80h560v80H280Z"/></svg></button>
                     </div>
                 </div>
@@ -1189,10 +1192,10 @@
                 </div>
 
                 <div class="replay-controls" id="replay-controls" hidden>
-                    <button id="replay-prev-btn" type="button" aria-label="Previous move">⏮️</button>
-                    <button id="replay-playpause-btn" type="button" aria-label="Play replay">▶️</button>
-                    <button id="replay-next-btn" type="button" aria-label="Next move">⏭️</button>
-                    <button id="replay-exit-btn" type="button" aria-label="Exit replay">⏹️</button>
+                    <button id="replay-playpause-btn" type="button" title="Play replay" aria-label="Play replay"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M320-200v-560l440 280-440 280Zm80-280Zm0 134 210-134-210-134v268Z"/></svg></button>
+                    <button id="replay-prev-btn" type="button" title="Previous move" aria-label="Previous move"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M220-240v-480h80v480h-80Zm520 0L380-480l360-240v480Zm-80-240Zm0 90v-180l-136 90 136 90Z"/></svg></button>
+                    <button id="replay-next-btn" type="button" title="Next move" aria-label="Next move"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M660-240v-480h80v480h-80Zm-440 0v-480l360 240-360 240Zm80-240Zm0 90 136-90-136-90v180Z"/></svg></button>
+                    <button id="replay-play-from-here-btn" type="button" title="Play against computer from here" aria-label="Play against computer from here"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm-80-200 280-200-280-200v400Z"/></svg></button>
                 </div>
             </div>
         </div>
@@ -1314,8 +1317,40 @@
             </div>
         </div>
     </div>
+    <div class="sgf-export-popup" id="history-backup-popup" aria-hidden="true">
+        <div class="sgf-export-panel" role="dialog" aria-modal="true" aria-labelledby="history-backup-title">
+            <div class="sgf-export-header">
+                <span id="history-backup-title">Back up game history</span>
+                <div class="sgf-export-actions">
+                    <button id="history-backup-copy-btn" type="button">Copy</button>
+                    <button id="history-backup-close-btn" type="button">Close</button>
+                </div>
+            </div>
+            <div class="sgf-export-body">
+                <div class="sgf-export-description">Copy this backup text and keep it somewhere safe. After uploading a new version of the app, open Restore and paste it back to recover your full game history.</div>
+                <textarea id="history-backup-textarea" class="sgf-export-textarea" spellcheck="false" readonly></textarea>
+                <div id="history-backup-status" class="sgf-export-status"></div>
+            </div>
+        </div>
+    </div>
+    <div class="sgf-import-popup" id="history-restore-popup" aria-hidden="true">
+        <div class="sgf-import-panel" role="dialog" aria-modal="true" aria-labelledby="history-restore-title">
+            <div class="sgf-import-header">
+                <span id="history-restore-title">Restore game history</span>
+                <div class="sgf-import-actions">
+                    <button id="history-restore-submit-btn" type="button">Restore</button>
+                    <button id="history-restore-close-btn" type="button">Close</button>
+                </div>
+            </div>
+            <div class="sgf-import-body">
+                <div class="sgf-import-description">Paste a backup created with the Back up button. Restored games are merged with any existing history (duplicates are skipped).</div>
+                <textarea id="history-restore-textarea" class="sgf-import-textarea" spellcheck="false"></textarea>
+                <div id="history-restore-status" class="sgf-import-status"></div>
+            </div>
+        </div>
+    </div>
 
-    <script src="version.js"></script>
+    <script src="js/version.js"></script>
     <script>
         const boardSize = 15;
         const appVersion = (window.GOMOKU_APP_VERSION && String(window.GOMOKU_APP_VERSION).trim()) || 'dev';
@@ -1341,19 +1376,44 @@
         const connectedPeersListEl = document.getElementById('connected-peers-list');
         const gameHistoryPanel = document.getElementById('game-history-panel');
         const gameHistoryList = document.getElementById('game-history-list');
-        const gameHistoryImportBtn = document.getElementById('game-history-import-btn');
+        const gameImportBtn = document.getElementById('game-import-btn');
+        const gameHistoryBackupBtn = document.getElementById('game-history-backup-btn');
+        const gameHistoryRestoreBtn = document.getElementById('game-history-restore-btn');
         const gameHistoryClearBtn = document.getElementById('game-history-clear-btn');
         const replayBanner = document.getElementById('replay-banner');
         const replayControls = document.getElementById('replay-controls');
         const replayPrevBtn = document.getElementById('replay-prev-btn');
         const replayPlayPauseBtn = document.getElementById('replay-playpause-btn');
+        const replayPlayFromHereBtn = document.getElementById('replay-play-from-here-btn');
         const replayNextBtn = document.getElementById('replay-next-btn');
-        const replayExitBtn = document.getElementById('replay-exit-btn');
         const moveListPanel = document.getElementById('move-list-panel');
         const moveListEl = document.getElementById('move-list');
         const moveListEmptyEl = document.getElementById('move-list-empty');
         const currentMatchMetaEl = document.getElementById('current-match-meta');
         window.addEventListener('resize', positionBoardCells);
+
+        // Keep the board square while never exceeding the vertical space actually
+        // available in short/landscape viewports (e.g. 1280x640), where width alone
+        // would otherwise force a board taller than the visible area.
+        (function setupBoardMaxSquare() {
+            const boardArea = boardElement ? boardElement.closest('.board-area') : null;
+            if (!boardArea) return;
+            const update = () => {
+                if (document.body.classList.contains('board-zoom-enabled')) return;
+                const height = boardArea.getBoundingClientRect().height;
+                if (height > 0) {
+                    document.documentElement.style.setProperty('--board-max-square', `${Math.floor(height)}px`);
+                }
+                positionBoardCells();
+            };
+            if (typeof ResizeObserver !== 'undefined') {
+                new ResizeObserver(update).observe(boardArea);
+            } else {
+                window.addEventListener('resize', update);
+            }
+            update();
+        })();
+
         const turnIndicator = document.getElementById('turn-indicator');
         const moveTimerEl = document.getElementById('move-timer');
         const p1NameInput = document.getElementById('p1-name');
@@ -1392,6 +1452,16 @@
         const sgfImportStatus = document.getElementById('sgf-import-status');
         const sgfImportSubmitBtn = document.getElementById('sgf-import-submit-btn');
         const sgfImportCloseBtn = document.getElementById('sgf-import-close-btn');
+        const historyBackupPopup = document.getElementById('history-backup-popup');
+        const historyBackupTextarea = document.getElementById('history-backup-textarea');
+        const historyBackupStatus = document.getElementById('history-backup-status');
+        const historyBackupCopyBtn = document.getElementById('history-backup-copy-btn');
+        const historyBackupCloseBtn = document.getElementById('history-backup-close-btn');
+        const historyRestorePopup = document.getElementById('history-restore-popup');
+        const historyRestoreTextarea = document.getElementById('history-restore-textarea');
+        const historyRestoreStatus = document.getElementById('history-restore-status');
+        const historyRestoreSubmitBtn = document.getElementById('history-restore-submit-btn');
+        const historyRestoreCloseBtn = document.getElementById('history-restore-close-btn');
         const debugEntries = [];
         const maxDebugEntries = 200;
         const notifications = [];
@@ -1975,6 +2045,139 @@
             }
         }
 
+        const historyBackupKind = 'gomoku-game-history-backup';
+
+        function buildHistoryBackup() {
+            return JSON.stringify({
+                app: 'gomoku-webxdc',
+                kind: historyBackupKind,
+                formatVersion: 1,
+                exportedAt: Date.now(),
+                appVersion,
+                games: gameHistory
+            }, null, 2);
+        }
+
+        function setHistoryBackupStatus(message) {
+            if (!historyBackupStatus) return;
+            historyBackupStatus.textContent = message || '';
+        }
+
+        function hideHistoryBackupPopup() {
+            if (!historyBackupPopup) return;
+            historyBackupPopup.classList.remove('visible');
+            historyBackupPopup.setAttribute('aria-hidden', 'true');
+            setHistoryBackupStatus('');
+        }
+
+        function showHistoryBackupPopup() {
+            if (!historyBackupPopup || !historyBackupTextarea) return;
+            if (!gameHistory.length) {
+                historyBackupTextarea.value = '';
+                setHistoryBackupStatus('There is no game history to back up yet.');
+            } else {
+                historyBackupTextarea.value = buildHistoryBackup();
+                setHistoryBackupStatus(`${gameHistory.length} game${gameHistory.length === 1 ? '' : 's'} ready to copy.`);
+            }
+            historyBackupPopup.classList.add('visible');
+            historyBackupPopup.setAttribute('aria-hidden', 'false');
+            requestAnimationFrame(() => {
+                historyBackupTextarea.focus();
+                historyBackupTextarea.select();
+            });
+        }
+
+        async function copyHistoryBackupToClipboard() {
+            if (!historyBackupTextarea) return;
+            const text = historyBackupTextarea.value;
+            if (!text) {
+                setHistoryBackupStatus('There is no game history to back up yet.');
+                return;
+            }
+            try {
+                if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    historyBackupTextarea.focus();
+                    historyBackupTextarea.select();
+                    const copied = document.execCommand('copy');
+                    if (!copied) throw new Error('Copy command was rejected');
+                }
+                setHistoryBackupStatus('Backup copied to clipboard.');
+            } catch (error) {
+                setHistoryBackupStatus('Clipboard copy failed. Copy manually from the textbox.');
+                console.warn('Unable to copy game history backup:', error);
+            }
+        }
+
+        function setHistoryRestoreStatus(message) {
+            if (!historyRestoreStatus) return;
+            historyRestoreStatus.textContent = message || '';
+        }
+
+        function hideHistoryRestorePopup() {
+            if (!historyRestorePopup) return;
+            historyRestorePopup.classList.remove('visible');
+            historyRestorePopup.setAttribute('aria-hidden', 'true');
+            setHistoryRestoreStatus('');
+        }
+
+        function showHistoryRestorePopup() {
+            if (!historyRestorePopup || !historyRestoreTextarea) return;
+            historyRestorePopup.classList.add('visible');
+            historyRestorePopup.setAttribute('aria-hidden', 'false');
+            setHistoryRestoreStatus('');
+            requestAnimationFrame(() => {
+                historyRestoreTextarea.focus();
+            });
+        }
+
+        function getHistoryEntryTime(entry) {
+            const value = Number(entry?.result?.finishedAt ?? entry?.finishedAt ?? entry?.startedAt);
+            return Number.isFinite(value) ? value : 0;
+        }
+
+        function restoreHistoryFromBackup() {
+            if (!historyRestoreTextarea) return;
+            const raw = historyRestoreTextarea.value.trim();
+            if (!raw) {
+                setHistoryRestoreStatus('Paste a backup first.');
+                return;
+            }
+            let parsed;
+            try {
+                parsed = JSON.parse(raw);
+            } catch (_) {
+                setHistoryRestoreStatus('This does not look like a valid backup (invalid JSON).');
+                return;
+            }
+            if (!parsed || parsed.kind !== historyBackupKind || !Array.isArray(parsed.games)) {
+                setHistoryRestoreStatus('This does not look like a Gomoku game history backup.');
+                return;
+            }
+            const importedGames = parsed.games.filter((entry) => entry && typeof entry === 'object');
+            const seenIds = new Set();
+            const merged = [];
+            for (const entry of [...gameHistory, ...importedGames]) {
+                if (!entry || typeof entry !== 'object') continue;
+                const id = typeof entry.id === 'string' ? entry.id : null;
+                if (id) {
+                    if (seenIds.has(id)) continue;
+                    seenIds.add(id);
+                }
+                merged.push(entry);
+            }
+            const previousCount = gameHistory.length;
+            merged.sort((a, b) => getHistoryEntryTime(b) - getHistoryEntryTime(a));
+            gameHistory = merged.slice(0, 100);
+            saveGameHistory();
+            renderGameHistory();
+            const addedCount = gameHistory.length - previousCount;
+            historyRestoreTextarea.value = '';
+            hideHistoryRestorePopup();
+            debugLog('HISTORY_RESTORED', { imported: importedGames.length, added: Math.max(0, addedCount), total: gameHistory.length });
+        }
+
         function getReplayMoves(entry) {
             const boardSnapshot = Array.isArray(entry?.board) ? entry.board : null;
             if (Array.isArray(entry?.moves) && entry.moves.length) return cloneMoveLog(entry.moves);
@@ -2113,14 +2316,15 @@
             if (replayNextBtn) replayNextBtn.disabled = !active || atEnd;
             if (replayPlayPauseBtn) {
                 const isPaused = !historyReplayTimer;
-                replayPlayPauseBtn.textContent = isPaused ? '▶️' : '⏸️';
+                replayPlayPauseBtn.innerHTML = isPaused
+                    ? '<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M320-200v-560l440 280-440 280Zm80-280Zm0 134 210-134-210-134v268Z"/></svg>'
+                    : '<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M520-200v-560h240v560H520Zm-320 0v-560h240v560H200Zm400-80h80v-400h-80v400Zm-320 0h80v-400h-80v400Zm0-400v400-400Zm320 0v400-400Z"/></svg>';
                 replayPlayPauseBtn.setAttribute('aria-label', isPaused ? 'Play replay' : 'Pause replay');
+                replayPlayPauseBtn.setAttribute('title', isPaused ? 'Play replay' : 'Pause replay');
                 replayPlayPauseBtn.disabled = totalMoves === 0;
             }
-            if (replayExitBtn) {
-                replayExitBtn.textContent = '⏹️';
-                replayExitBtn.setAttribute('aria-label', 'Exit replay');
-                replayExitBtn.disabled = !active;
+            if (replayPlayFromHereBtn) {
+                replayPlayFromHereBtn.disabled = !active;
             }
         }
 
@@ -2202,16 +2406,76 @@
             endReplay({ clearBoard: true });
         }
 
+        function playFromReplayPoint() {
+            if (!historyReplayState) return;
+
+            const replayState = historyReplayState;
+            const movesToKeep = cloneMoveLog(replayState.moves.slice(0, replayState.index));
+            if (historyReplayTimer) {
+                clearInterval(historyReplayTimer);
+                historyReplayTimer = null;
+            }
+            historyReplayState = null;
+            if (replayControls) replayControls.hidden = true;
+
+            gameModeSelect.value = 'pve';
+            if (tournamentState.countdownTimer) {
+                clearInterval(tournamentState.countdownTimer);
+                tournamentState.countdownTimer = null;
+            }
+            if (tournamentState.clockTimer) {
+                clearInterval(tournamentState.clockTimer);
+                tournamentState.clockTimer = null;
+            }
+            tournamentState.enabled = false;
+            tournamentState.finished = false;
+            tournamentState.countdownDeadlineTs = null;
+            tournamentState.deadlineTs = null;
+            const nextPlayer = movesToKeep.length % 2 === 0 ? 1 : 2;
+            pveComputerPlayer = nextPlayer;
+            const humanName = cleanPlayerName(myName || 'Player');
+            p1NameInput.value = pveComputerPlayer === 1 ? 'Computer (Black)' : `${humanName} (Black)`;
+            p2NameInput.value = pveComputerPlayer === 2 ? 'Computer (White)' : `${humanName} (White)`;
+            p1NameInput.disabled = pveComputerPlayer === 1;
+            p2NameInput.disabled = pveComputerPlayer === 2;
+            networkPlayers = { 1: null, 2: null };
+            myAssignedPlayer = null;
+            computerMoveRequestToken++;
+            isComputerThinking = false;
+            currentGameMoveLog = movesToKeep;
+            lastPlacedMove = movesToKeep.length ? movesToKeep[movesToKeep.length - 1] : null;
+            gameOver = false;
+            currentPlayer = nextPlayer;
+            resetPlayerGameClocks();
+            renderMoveList(currentGameMoveLog);
+            highlightMoveListItem(currentGameMoveLog.length);
+            renderBoardFromState();
+            updateDifficultyControlVisibility();
+            updateModeSelectState();
+            updateConnectionIndicator();
+            updateCurrentMatchDisplay();
+            updateTurnIndicator();
+            startMoveTimerForCurrentTurn({ resetDeadline: true });
+            maybeStartComputerTurn();
+            renderGameHistory();
+        }
+
         if (replayPrevBtn) replayPrevBtn.addEventListener('click', () => replayStep(-1));
         if (replayNextBtn) replayNextBtn.addEventListener('click', () => replayStep(1));
         if (replayPlayPauseBtn) replayPlayPauseBtn.addEventListener('click', toggleReplayPlayback);
-        if (replayExitBtn) replayExitBtn.addEventListener('click', stopReplay);
-        if (gameHistoryImportBtn) gameHistoryImportBtn.addEventListener('click', showSgfImportPopup);
+        if (replayPlayFromHereBtn) replayPlayFromHereBtn.addEventListener('click', playFromReplayPoint);
+        if (gameImportBtn) gameImportBtn.addEventListener('click', showSgfImportPopup);
+        if (gameHistoryBackupBtn) gameHistoryBackupBtn.addEventListener('click', showHistoryBackupPopup);
+        if (gameHistoryRestoreBtn) gameHistoryRestoreBtn.addEventListener('click', showHistoryRestorePopup);
         if (gameHistoryClearBtn) gameHistoryClearBtn.addEventListener('click', clearGameHistory);
         if (sgfExportCopyBtn) sgfExportCopyBtn.addEventListener('click', copySgfExportToClipboard);
         if (sgfExportCloseBtn) sgfExportCloseBtn.addEventListener('click', hideSgfExportPopup);
         if (sgfImportSubmitBtn) sgfImportSubmitBtn.addEventListener('click', importGameHistoryFromSgf);
         if (sgfImportCloseBtn) sgfImportCloseBtn.addEventListener('click', hideSgfImportPopup);
+        if (historyBackupCopyBtn) historyBackupCopyBtn.addEventListener('click', copyHistoryBackupToClipboard);
+        if (historyBackupCloseBtn) historyBackupCloseBtn.addEventListener('click', hideHistoryBackupPopup);
+        if (historyRestoreSubmitBtn) historyRestoreSubmitBtn.addEventListener('click', restoreHistoryFromBackup);
+        if (historyRestoreCloseBtn) historyRestoreCloseBtn.addEventListener('click', hideHistoryRestorePopup);
         if (sgfExportPopup) {
             sgfExportPopup.addEventListener('click', (event) => {
                 if (event.target === sgfExportPopup) {
@@ -2226,11 +2490,29 @@
                 }
             });
         }
+        if (historyBackupPopup) {
+            historyBackupPopup.addEventListener('click', (event) => {
+                if (event.target === historyBackupPopup) {
+                    hideHistoryBackupPopup();
+                }
+            });
+        }
+        if (historyRestorePopup) {
+            historyRestorePopup.addEventListener('click', (event) => {
+                if (event.target === historyRestorePopup) {
+                    hideHistoryRestorePopup();
+                }
+            });
+        }
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape' && sgfExportPopup && sgfExportPopup.classList.contains('visible')) {
                 hideSgfExportPopup();
             } else if (event.key === 'Escape' && sgfImportPopup && sgfImportPopup.classList.contains('visible')) {
                 hideSgfImportPopup();
+            } else if (event.key === 'Escape' && historyBackupPopup && historyBackupPopup.classList.contains('visible')) {
+                hideHistoryBackupPopup();
+            } else if (event.key === 'Escape' && historyRestorePopup && historyRestorePopup.classList.contains('visible')) {
+                hideHistoryRestorePopup();
             }
         });
 
@@ -2303,6 +2585,7 @@
             const moves = getReplayMoves(entry);
             const boardSnapshot = Array.isArray(entry.board) ? entry.board : null;
             gameModeSelect.value = 'pvp';
+            updateDifficultyControlVisibility();
             initBoard(false);
             historyReplayState = { entry, index: 0, moves, boardSnapshot };
             board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
@@ -2739,10 +3022,12 @@
         function updateDifficultyControlVisibility() {
             if (!difficultyControl || !difficultySelect) return;
             const isPve = gameModeSelect.value === 'pve';
-            difficultyControl.hidden = !isPve;
-            difficultySelect.disabled = !isPve;
-            difficultyControl.style.display = isPve ? '' : 'none';
-            difficultySelect.hidden = !isPve;
+            const isPvp = gameModeSelect.value === 'pvp';
+            const isVisible = isPve || isPvp;
+            difficultyControl.hidden = !isVisible;
+            difficultySelect.disabled = !isVisible;
+            difficultyControl.style.display = isVisible ? '' : 'none';
+            difficultySelect.hidden = !isVisible;
         }
 
         if (difficultySelect) {
@@ -2760,7 +3045,7 @@
         }
 
         function createComputerWorker() {
-            const workerPath = getSelectedDifficultyDepth() >= 6 ? 'sifu.js' : 'worker.js';
+            const workerPath = getSelectedDifficultyDepth() >= 6 ? 'js/sifu.js' : 'js/worker.js';
             if (computerWorker && computerWorker.__enginePath === workerPath) return computerWorker;
             if (computerWorker) {
                 computerWorker.terminate();
@@ -3287,7 +3572,8 @@
 
         function shouldRunMoveTimer() {
             if (gameOver || !Array.isArray(board) || board.length !== boardSize) return false;
-            if (gameModeSelect.value === 'pve' || gameModeSelect.value === 'pvp') return true;
+            if (gameModeSelect.value === 'pvp') return false;
+            if (gameModeSelect.value === 'pve') return true;
             if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return true;
 
             const localPlayerNumber = getLocalAssignedPlayerNumber();
@@ -3336,6 +3622,12 @@
                 const remainingMs = Math.max(0, remainingBase - elapsedMs);
                 moveTimerEl.textContent = `Move Timer: ${formatClockDuration(remainingMs)}${tournamentText}`;
                 moveTimerEl.style.color = remainingMs <= 10000 ? '#ff7675' : remainingMs <= 30000 ? '#f6c90e' : '#c8d6e5';
+                return;
+            }
+
+            if (gameModeSelect.value === 'pvp') {
+                moveTimerEl.textContent = 'Move Timer: --';
+                moveTimerEl.style.color = '#c8d6e5';
                 return;
             }
 

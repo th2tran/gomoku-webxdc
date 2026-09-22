@@ -1,1 +1,0 @@
-window.GOMOKU_APP_VERSION = "0.8.234";

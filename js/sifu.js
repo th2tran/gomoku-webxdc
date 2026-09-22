@@ -392,6 +392,32 @@ function countOpenThreeThreats(board, player) {
     return total;
 }
 
+// How much latent attacking support the opponent has radiating out of a single
+// empty square, measured as nearby opponent stones along every axis (closer
+// stones weighted more, a ray blocked by one of our own stones stops counting).
+// When we are forced to block one end of an opponent's open three, both ends
+// save the same immediate threat, but the end flanked by more opponent stones
+// is the one that would let them weave a follow-up fork (as in the (6,9)
+// junction of the reported loss, seeded by a distance-2 stone at (8,7)). We
+// therefore prefer to occupy the higher-support end and push the opponent's
+// forced extension toward their empty side.
+function countOpponentSupportThroughSquare(board, r, c, opponent) {
+    let support = 0;
+    for (const [dr, dc] of DIRECTIONS) {
+        for (const step of [-1, 1]) {
+            for (let k = 1; k <= 3; k++) {
+                const rr = r + dr * step * k;
+                const cc = c + dc * step * k;
+                if (!inBounds(rr, cc)) break;
+                const value = board[rr][cc];
+                if (value === opponent) support += 4 - k;
+                else if (value !== EMPTY) break;
+            }
+        }
+    }
+    return support;
+}
+
 function findExistingOpenThreeBlockingMoves(board, player) {
     const opponent = player === BLACK ? WHITE : BLACK;
     const patterns = [
@@ -433,6 +459,7 @@ function findExistingOpenThreeBlockingMoves(board, player) {
         const [r, c] = key.split(',').map(Number);
         return { r, c, savedThreats };
     }).sort((a, b) => b.savedThreats - a.savedThreats
+        || countOpponentSupportThroughSquare(board, b.r, b.c, opponent) - countOpponentSupportThroughSquare(board, a.r, a.c, opponent)
         || scoreMove(board, b.r, b.c, player) - scoreMove(board, a.r, a.c, player));
 }
 
@@ -482,6 +509,61 @@ function findLiveThreeBlockingMoves(board, player) {
     return existingBlocks.length
         ? existingBlocks
         : findThreatBlockingMoves(board, player, ['open-three']);
+}
+
+// Enumerate every empty square where the opponent, with a single stone, would
+// simultaneously create a four (a line one move from five) AND a brand new open
+// three. This "four-three" shape is a forced win: the defender is compelled to
+// answer the four, after which the untouched open three is pushed to an open
+// four and wins. Because the four component leaves only one legal reply, the
+// only way to stop the fork is to occupy the fork square itself *before* the
+// opponent plays it. Returns the forks with the fork square each would use.
+function findFourThreeForkMoves(board, player) {
+    const opponent = player === BLACK ? WHITE : BLACK;
+    const baselineLiveThrees = countExistingLiveThreeLines(board, opponent);
+    const forks = [];
+
+    for (const move of getThreatSpaceCandidateMoves(board, opponent, 24)) {
+        if (board[move.r]?.[move.c] !== EMPTY) continue;
+
+        const afterOpponent = cloneBoard(board);
+        afterOpponent[move.r][move.c] = opponent;
+
+        // The move must create a four (severity >= 4). A completed five is
+        // already an immediate win handled earlier, so ignore it here.
+        const threat = classifyThreatAtMove(board, move.r, move.c, opponent);
+        if (threat.severity < 4 || threat.type === 'five') continue;
+        if (!findImmediateWin(afterOpponent, opponent)) continue;
+
+        // ...and, on a different line, a genuinely new open three.
+        const newLiveThrees = countExistingLiveThreeLines(afterOpponent, opponent) - baselineLiveThrees;
+        if (newLiveThrees <= 0) continue;
+
+        forks.push({ r: move.r, c: move.c, newLiveThrees, fourType: threat.type });
+    }
+
+    return forks.sort((a, b) => b.newLiveThrees - a.newLiveThrees
+        || scoreMove(board, b.r, b.c, player) - scoreMove(board, a.r, a.c, player));
+}
+
+// Choose the defensive reply to a preventable "four-three" fork. Occupying the
+// fork square removes both the four and the open three with one stone, so it is
+// strongly preferred; it is only rejected if doing so would hand the opponent
+// an immediate win elsewhere. Returns null when no such fork exists.
+function findFourThreeForkDefense(board, player) {
+    const opponent = player === BLACK ? WHITE : BLACK;
+    const forks = findFourThreeForkMoves(board, player);
+    if (!forks.length) return null;
+
+    for (const fork of forks) {
+        const afterOccupy = cloneBoard(board);
+        afterOccupy[fork.r][fork.c] = player;
+        if (!findImmediateWin(afterOccupy, opponent)) {
+            return { r: fork.r, c: fork.c };
+        }
+    }
+
+    return null;
 }
 
 function runThreatSpaceSearch(board, attacker, defender, depth = 3) {
@@ -537,6 +619,142 @@ function findDoubleThreatMove(board, player) {
         const score = scoreMove(board, move.r, move.c, player);
         if (score > bestScore) {
             bestScore = score;
+            bestMove = { r: move.r, c: move.c };
+        }
+    }
+
+    return bestMove;
+}
+
+function countExistingLiveThreeLines(board, player) {
+    // Patterns describe a run of 3 player stones with enough open room on
+    // both sides to become an open four. Different patterns can match the
+    // SAME physical 3-stone run (just with more padding on one side), so we
+    // dedupe by the actual stone coordinates to avoid counting one real
+    // live three multiple times.
+    const patterns = [
+        [EMPTY, player, player, player, EMPTY],
+        [EMPTY, EMPTY, player, player, player, EMPTY],
+        [EMPTY, player, player, player, EMPTY, EMPTY]
+    ];
+    const seen = new Set();
+
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            for (const [dr, dc] of DIRECTIONS) {
+                for (const pattern of patterns) {
+                    let matches = true;
+                    const stoneCells = [];
+                    for (let i = 0; i < pattern.length; i++) {
+                        const rr = r + dr * i;
+                        const cc = c + dc * i;
+                        if (!inBounds(rr, cc) || board[rr][cc] !== pattern[i]) {
+                            matches = false;
+                            break;
+                        }
+                        if (pattern[i] === player) stoneCells.push(rr + ',' + cc);
+                    }
+                    if (matches) {
+                        seen.add(stoneCells.join('|'));
+                    }
+                }
+            }
+        }
+    }
+
+    return seen.size;
+}
+
+function findOpponentForkThreats(board, player) {
+    const opponent = player === BLACK ? WHITE : BLACK;
+    const threats = [];
+    const candidates = getThreatSpaceCandidateMoves(board, opponent, 24);
+    const currentLiveThreeLines = countExistingLiveThreeLines(board, opponent);
+
+    for (const move of candidates) {
+        if (board[move.r]?.[move.c] !== EMPTY) continue;
+
+        const afterOpponentMove = cloneBoard(board);
+        afterOpponentMove[move.r][move.c] = opponent;
+        const immediateWins = enumerateImmediateWinningMoves(afterOpponentMove, opponent);
+        const liveThreeBlocks = findExistingOpenThreeBlockingMoves(afterOpponentMove, player);
+        const liveThreeLines = countExistingLiveThreeLines(afterOpponentMove, opponent);
+        const newLiveThreeLines = Math.max(0, liveThreeLines - currentLiveThreeLines);
+        const createsImmediateAndLiveThree = immediateWins.length > 0 && newLiveThreeLines > 0;
+        const createsDoubleImmediateWin = immediateWins.length >= 2;
+        const createsDoubleLiveThree = newLiveThreeLines >= 2;
+
+        if (!createsImmediateAndLiveThree && !createsDoubleImmediateWin && !createsDoubleLiveThree) continue;
+
+        threats.push({
+            move: { r: move.r, c: move.c },
+            immediateWins,
+            liveThreeBlocks,
+            liveThreeLines,
+            newLiveThreeLines,
+            score: immediateWins.length * 100000
+                + newLiveThreeLines * 90000
+                + liveThreeBlocks.length * 25000
+                + scoreMove(board, move.r, move.c, opponent)
+        });
+    }
+
+    return threats.sort((a, b) => b.score - a.score);
+}
+
+function sumOpponentForkThreatScore(board, player) {
+    return findOpponentForkThreats(board, player)
+        .reduce((total, threat) => total + threat.score, 0);
+}
+
+function findPreemptiveForkDefense(board, player) {
+    const threats = findOpponentForkThreats(board, player);
+    if (!threats.length) return null;
+
+    for (const threat of threats) {
+        const gain = threat.move;
+        if (board[gain.r]?.[gain.c] !== EMPTY) continue;
+
+        const afterGainBlock = cloneBoard(board);
+        afterGainBlock[gain.r][gain.c] = player;
+        if (!findImmediateWin(afterGainBlock, player === BLACK ? WHITE : BLACK)) {
+            return { r: gain.r, c: gain.c };
+        }
+    }
+
+    const currentScore = threats.reduce((total, threat) => total + threat.score, 0);
+    const candidates = new Map();
+    const addCandidate = (move, gainBlock = false) => {
+        if (!move || board[move.r]?.[move.c] !== EMPTY) return;
+        const key = `${move.r},${move.c}`;
+        const current = candidates.get(key);
+        candidates.set(key, {
+            r: move.r,
+            c: move.c,
+            gainBlock: Boolean(current?.gainBlock || gainBlock)
+        });
+    };
+
+    for (const threat of threats) {
+        addCandidate(threat.move, true);
+        for (const win of threat.immediateWins) addCandidate(win);
+        for (const block of threat.liveThreeBlocks) addCandidate(block);
+    }
+
+    let bestMove = null;
+    let bestRemainingScore = currentScore;
+    let bestTieBreakScore = Number.NEGATIVE_INFINITY;
+    for (const move of candidates.values()) {
+        const afterDefense = cloneBoard(board);
+        afterDefense[move.r][move.c] = player;
+        if (findImmediateWin(afterDefense, player === BLACK ? WHITE : BLACK)) continue;
+
+        const remainingScore = sumOpponentForkThreatScore(afterDefense, player);
+        const tieBreakScore = (move.gainBlock ? 1000000 : 0) + scoreMove(board, move.r, move.c, player);
+        if (remainingScore < bestRemainingScore
+            || (remainingScore === bestRemainingScore && tieBreakScore > bestTieBreakScore)) {
+            bestRemainingScore = remainingScore;
+            bestTieBreakScore = tieBreakScore;
             bestMove = { r: move.r, c: move.c };
         }
     }
@@ -708,8 +926,35 @@ function chooseMove(board, payload) {
     const forcedBlock = findImmediateBlock(boardCopy, aiPlayer);
     if (forcedBlock) return forcedBlock;
 
+    // An existing open three / four is an immediate forcing threat: if left
+    // unanswered the opponent converts it into an (open) four and wins. Block it
+    // before anything speculative. `findExistingOpenThreeBlockingMoves` only
+    // reacts to shapes already on the board, so it will not fire on a merely
+    // potential fork.
+    const existingOpenThreeBlocks = findExistingOpenThreeBlockingMoves(boardCopy, aiPlayer);
+    if (existingOpenThreeBlocks.length) {
+        return { r: existingOpenThreeBlocks[0].r, c: existingOpenThreeBlocks[0].c };
+    }
+
+    // No four/open-four is on the board yet, but the opponent may have a single
+    // move that would create a four AND an open three at once (a "four-three"
+    // fork). That shape is a forced loss once played, and the four component
+    // makes it unblockable after the fact, so the fork square must be occupied
+    // pre-emptively. This must run before the generic threat-space block below,
+    // which otherwise maximizes total severity reduction and can leave the fork
+    // square open (the reported bug: White played (8,8) and lost to (6,9)). It
+    // runs in every difficulty because it averts an otherwise unavoidable
+    // defeat, not merely a positional disadvantage.
+    const fourThreeForkDefense = findFourThreeForkDefense(boardCopy, aiPlayer);
+    if (fourThreeForkDefense) return fourThreeForkDefense;
+
     const urgentLiveThreeBlock = findUrgentLiveThreeBlock(boardCopy, aiPlayer);
     if (urgentLiveThreeBlock) return urgentLiveThreeBlock;
+
+    if (payload.isHard) {
+        const preemptiveForkDefense = findPreemptiveForkDefense(boardCopy, aiPlayer);
+        if (preemptiveForkDefense) return preemptiveForkDefense;
+    }
 
     if (payload.isHard) {
         const attackSequence = runThreatSpaceSearch(boardCopy, aiPlayer, humanPlayer, 3);
@@ -810,7 +1055,7 @@ function emitProgress(stage, payload = {}) {
     postMessage({ type: 'progress', stage, ...payload });
 }
 
-self.onmessage = function (event) {
+function handleMessage(event) {
     const payload = event.data || {};
     const board = Array.isArray(payload.board) ? payload.board : [];
     const token = Number.isInteger(payload.token) ? payload.token : null;
@@ -838,4 +1083,37 @@ self.onmessage = function (event) {
         return;
     }
     postMessage({ type: 'move', token, move });
-};
+}
+
+// In a Web Worker (WebXDC runtime) wire up the message handler. Guarded so the
+// same file can be required from Node for unit testing without a worker global.
+if (typeof self !== 'undefined' && typeof self.postMessage === 'function') {
+    self.onmessage = handleMessage;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        EMPTY,
+        BLACK,
+        WHITE,
+        SIZE,
+        CENTER,
+        cloneBoard,
+        isWinAfterMove,
+        classifyThreatAtMove,
+        countOpenThreeThreats,
+        findImmediateWin,
+        findImmediateBlock,
+        findExistingOpenThreeBlockingMoves,
+        countOpponentSupportThroughSquare,
+        findLiveThreeBlockingMoves,
+        findUrgentLiveThreeBlock,
+        findFourThreeForkMoves,
+        findFourThreeForkDefense,
+        findOpenThreeBlockingMoves,
+        findPreemptiveForkDefense,
+        countExistingLiveThreeLines,
+        chooseMove,
+        handleMessage
+    };
+}

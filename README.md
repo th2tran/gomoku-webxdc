@@ -84,7 +84,8 @@ dist/gomoku-0.2.73.xdc
 
 - `index.html`: game UI, rules, networking logic, tournament logic, and WebXDC integration.
 - `package.json`: build scripts and package metadata.
-- `version.js`: runtime version metadata embedded into the app.
+- `js/`: game engine sources (`sifu.js`, `worker.js`) and generated `version.js` version metadata.
+- `test/`: Node-based unit tests for the AI engine (run with `npm test`).
 - `dist/`: packaged WebXDC output.
 
 ## Notes

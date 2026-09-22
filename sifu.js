@@ -525,6 +525,50 @@ function countOpenThreeThreats(board, player) {
     return total;
 }
 
+function findExistingOpenThreeBlockingMoves(board, player) {
+    const opponent = player === BLACK ? WHITE : BLACK;
+    const patterns = [
+        [EMPTY, opponent, opponent, opponent, EMPTY],
+        [EMPTY, EMPTY, opponent, opponent, opponent, EMPTY],
+        [EMPTY, opponent, opponent, EMPTY, opponent, EMPTY],
+        [EMPTY, opponent, EMPTY, opponent, opponent, EMPTY]
+    ];
+    const blocks = new Map();
+
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            for (const [dr, dc] of DIRECTIONS) {
+                for (const pattern of patterns) {
+                    const cells = [];
+                    let inBoundsPattern = true;
+                    for (let i = 0; i < pattern.length; i++) {
+                        const rr = r + dr * i;
+                        const cc = c + dc * i;
+                        if (!inBounds(rr, cc)) {
+                            inBoundsPattern = false;
+                            break;
+                        }
+                        cells.push({ r: rr, c: cc });
+                    }
+                    if (!inBoundsPattern || !pattern.every((value, i) => board[cells[i].r][cells[i].c] === value)) continue;
+
+                    for (const cell of cells) {
+                        if (board[cell.r][cell.c] !== EMPTY) continue;
+                        const key = `${cell.r},${cell.c}`;
+                        blocks.set(key, (blocks.get(key) || 0) + 1);
+                    }
+                }
+            }
+        }
+    }
+
+    return Array.from(blocks, ([key, savedThreats]) => {
+        const [r, c] = key.split(',').map(Number);
+        return { r, c, savedThreats };
+    }).sort((a, b) => b.savedThreats - a.savedThreats
+        || scoreMove(board, b.r, b.c, player) - scoreMove(board, a.r, a.c, player));
+}
+
 function findThreatBlockingMoves(board, player, threatTypes) {
     const opponent = player === BLACK ? WHITE : BLACK;
     const currentThreats = [];
@@ -560,12 +604,17 @@ function findThreatBlockingMoves(board, player, threatTypes) {
 }
 
 function findUrgentLiveThreeBlock(board, player) {
+    const existingBlocks = findExistingOpenThreeBlockingMoves(board, player);
+    if (existingBlocks.length) return { r: existingBlocks[0].r, c: existingBlocks[0].c };
     const blocks = findThreatBlockingMoves(board, player, ['open-three', 'simple-four', 'open-four']);
     return blocks.length ? { r: blocks[0].r, c: blocks[0].c } : null;
 }
 
 function findLiveThreeBlockingMoves(board, player) {
-    return findThreatBlockingMoves(board, player, ['open-three']);
+    const existingBlocks = findExistingOpenThreeBlockingMoves(board, player);
+    return existingBlocks.length
+        ? existingBlocks
+        : findThreatBlockingMoves(board, player, ['open-three']);
 }
 
 function runThreatSpaceSearch(board, attacker, defender, depth = 3) {

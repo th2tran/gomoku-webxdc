@@ -6,11 +6,11 @@ const path = require('path');
 const { JSDOM } = require('jsdom');
 
 const rawHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
-const inlineScript = /<script>([\s\S]*?)<\/script>\s*<\/body>/.exec(rawHtml)[1];
+const gameScript = fs.readFileSync(path.join(__dirname, '..', '..', 'js', 'game.js'), 'utf8');
 const html = rawHtml
     .replace('<script src="webxdc.js"></script>', '')
     .replace(/<script src="js\/version\.js"><\/script>/, '')
-    .replace(inlineScript, '');
+    .replace(/<script src="js\/game\.js"><\/script>/, '');
 
 class Network {
     constructor() { this.peers = []; this.serial = 0; this.log = []; this.queue = []; this.flushing = false; }
@@ -69,7 +69,7 @@ function makePeer(net, addr, name) {
     // Inject as a real script element so top-level let/const become global
     // lexical bindings visible to later window.eval() calls.
     const script = dom.window.document.createElement('script');
-    script.textContent = inlineScript;
+    script.textContent = gameScript;
     dom.window.document.body.appendChild(script);
     return peer;
 }

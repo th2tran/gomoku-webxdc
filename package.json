@@ -8,7 +8,7 @@
     "test": "node --test",
     "sync-version": "node -e \"const fs=require('fs');const v=require('./package.json').version;fs.writeFileSync('js/version.js', 'window.GOMOKU_APP_VERSION = ' + JSON.stringify(v) + ';\\\\n');\"",
     "build": "npm version patch --no-git-tag-version && npm run sync-version && npm run build:xdc",
-    "build:xdc": "npm run sync-version && bestzip dist/gomoku-$(node -p \"require('./package.json').version\").xdc manifest.toml index.html js/worker.js js/sifu.js gomoku.png js/version.js"
+    "build:xdc": "npm run sync-version && bestzip dist/gomoku-$(node -p \"require('./package.json').version\").xdc manifest.toml index.html js/game.js js/worker.js js/sifu.js gomoku.png js/version.js"
   },
   "keywords": [
     "webxdc",

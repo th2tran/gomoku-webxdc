@@ -847,6 +847,213 @@ function findForcedLossDefense(board, player, opponent, depth) {
     return pickSafeDefense(board, player, opponent, candidates, depth, 16);
 }
 
+// ---------------------------------------------------------------------------
+// Allis-style solver: Threat-Space Search + Proof-Number Search.
+//
+// Allis (1993) proved Black wins free-style Gomoku by combining two searches:
+//   * Threat-Space Search (TSS) — only follow lines where the attacker keeps
+//     the initiative with continuous forcing moves: Victory by Continuous
+//     Fours (VCF) and Victory by Continuous Threats (VCT).
+//   * Proof-Number Search (PNS) — a best-first search over the full game tree
+//     that always expands the node that is currently cheapest to prove,
+//     using TSS as the terminal evaluator.
+// The original proof required an opening database and days of compute, so
+// it cannot be replayed live; what runs here is the same architecture with a
+// time budget, so that hard mode finds and converts forced wins as soon as
+// one exists and otherwise steers toward the branch closest to being proven.
+// ---------------------------------------------------------------------------
+
+// VCF: the attacker plays only fours. Each four leaves the defender exactly
+// one legal reply, so the tree is narrow and can be searched deep and cheaply.
+// Terminal wins are a five, an open four, or a double four.
+function findVcfSequence(board, attacker, defender, depth = 10, budget = { nodes: 4000 }) {
+    if (depth <= 0 || budget.nodes <= 0) return null;
+
+    const five = findImmediateWin(board, attacker);
+    if (five) return { move: five, type: 'five' };
+
+    // If the defender threatens a five, the only continuation is a four played
+    // on that very square.
+    const defenderWin = findImmediateWin(board, defender);
+
+    for (const square of collectAttackerThreatSquares(board, attacker)) {
+        if (budget.nodes-- <= 0) return null;
+        if (defenderWin && (square.r !== defenderWin.r || square.c !== defenderWin.c)) continue;
+        const threat = classifyThreatAtMove(board, square.r, square.c, attacker);
+        if (threat.severity < 4) continue;
+
+        board[square.r][square.c] = attacker;
+        const result = { move: { r: square.r, c: square.c }, type: threat.type };
+        if (threat.type === 'open-four') {
+            board[square.r][square.c] = EMPTY;
+            return result;
+        }
+        const wins = enumerateImmediateWinningMoves(board, attacker);
+        if (wins.length >= 2) {
+            board[square.r][square.c] = EMPTY;
+            return { ...result, type: 'double-four' };
+        }
+        let proven = false;
+        if (wins.length === 1) {
+            const reply = wins[0];
+            board[reply.r][reply.c] = defender;
+            if (!isWinAfterMove(board, reply.r, reply.c, defender)) {
+                proven = !!findVcfSequence(board, attacker, defender, depth - 1, budget);
+            }
+            board[reply.r][reply.c] = EMPTY;
+        }
+        board[square.r][square.c] = EMPTY;
+        if (proven) return result;
+    }
+    return null;
+}
+
+const PNS_INFINITY = Number.MAX_SAFE_INTEGER;
+
+// Proof-number search from the attacker's perspective. OR nodes are attacker
+// to move (win if any child wins), AND nodes are defender to move (win only if
+// every child wins). Leaves are scored by TSS: an attacker VCF/VCT proves the
+// node, a defender VCF (or an unanswerable double four) disproves it. The
+// board is mutated along the current path and restored on the way back.
+function proofNumberSearch(board, attacker, defender, options = {}) {
+    const {
+        maxNodes = 400,
+        timeLimitMs = 1200,
+        tssDepth = 3,
+        orBranch = 8,
+        andBranch = 10
+    } = options;
+    const startedAt = Date.now();
+    let evaluations = 0;
+
+    const setProven = (node) => { node.pn = 0; node.dn = PNS_INFINITY; };
+    const setDisproven = (node) => { node.pn = PNS_INFINITY; node.dn = 0; };
+
+    function evaluateLeaf(node) {
+        evaluations++;
+        if (node.isOr) {
+            if (findImmediateWin(board, attacker)) return setProven(node);
+            if (countImmediateWins(board, defender) >= 2) return setDisproven(node);
+            if (findVcfSequence(board, attacker, defender, 8, { nodes: 1500 })
+                || findForcedWinSequence(board, attacker, defender, tssDepth, { nodes: 600 })) {
+                return setProven(node);
+            }
+        } else {
+            if (findImmediateWin(board, defender)) return setDisproven(node);
+            if (countImmediateWins(board, attacker) >= 2) return setProven(node);
+            if (findVcfSequence(board, defender, attacker, 8, { nodes: 1500 })) return setDisproven(node);
+        }
+        node.pn = 1;
+        node.dn = 1;
+    }
+
+    function generateChildren(node) {
+        const mover = node.isOr ? attacker : defender;
+        const forced = findImmediateBlock(board, mover);
+        if (forced) return [forced];
+        if (node.isOr) return getThreatSpaceCandidateMoves(board, attacker, orBranch);
+
+        // Defender: if the attacker holds a live three, the replies are the
+        // squares that break it plus any counter-four; otherwise a positional set.
+        const blocks = collectLiveThreeBlockSquares(board, defender);
+        let moves;
+        if (blocks.length) {
+            moves = blocks.slice();
+            for (const square of collectAttackerThreatSquares(board, defender)) {
+                if (classifyThreatAtMove(board, square.r, square.c, defender).severity >= 4) moves.push(square);
+            }
+        } else {
+            moves = getThreatSpaceCandidateMoves(board, defender, andBranch);
+        }
+        return uniqueMoves(moves).slice(0, andBranch);
+    }
+
+    function updateNode(node) {
+        if (!node.children) return;
+        if (node.isOr) {
+            let pn = PNS_INFINITY;
+            let dn = 0;
+            for (const child of node.children) {
+                pn = Math.min(pn, child.pn);
+                dn = Math.min(PNS_INFINITY, dn + child.dn);
+            }
+            node.pn = pn;
+            node.dn = node.children.length ? dn : PNS_INFINITY;
+        } else {
+            let pn = 0;
+            let dn = PNS_INFINITY;
+            for (const child of node.children) {
+                pn = Math.min(PNS_INFINITY, pn + child.pn);
+                dn = Math.min(dn, child.dn);
+            }
+            node.pn = node.children.length ? pn : PNS_INFINITY;
+            node.dn = dn;
+        }
+    }
+
+    const root = { isOr: true, move: null, children: null, pn: 1, dn: 1 };
+    evaluateLeaf(root);
+
+    while (root.pn !== 0 && root.dn !== 0 && root.pn !== PNS_INFINITY
+        && evaluations < maxNodes && Date.now() - startedAt < timeLimitMs) {
+        // Select the most-proving node, applying moves along the path.
+        const path = [root];
+        let node = root;
+        while (node.children) {
+            let next = null;
+            for (const child of node.children) {
+                if (node.isOr ? child.pn < (next?.pn ?? PNS_INFINITY + 1) : child.dn < (next?.dn ?? PNS_INFINITY + 1)) next = child;
+            }
+            if (!next) break;
+            board[next.move.r][next.move.c] = node.isOr ? attacker : defender;
+            path.push(next);
+            node = next;
+        }
+        if (node.children) {
+            // Selected a node that was already expanded to nothing: dead end.
+            node.pn = PNS_INFINITY;
+            node.dn = PNS_INFINITY;
+            for (let i = path.length - 1; i >= 0; i--) {
+                if (i < path.length - 1) updateNode(path[i]);
+                if (i > 0) board[path[i].move.r][path[i].move.c] = EMPTY;
+            }
+            continue;
+        }
+
+        // Expand it.
+        const mover = node.isOr ? attacker : defender;
+        node.children = generateChildren(node).map((move) => ({ isOr: !node.isOr, move, children: null, pn: 1, dn: 1 }));
+        for (const child of node.children) {
+            board[child.move.r][child.move.c] = mover;
+            evaluateLeaf(child);
+            board[child.move.r][child.move.c] = EMPTY;
+            if (node.isOr ? child.pn === 0 : child.dn === 0) break;
+        }
+
+        // Back up along the path, undoing moves.
+        for (let i = path.length - 1; i >= 0; i--) {
+            updateNode(path[i]);
+            if (i > 0) board[path[i].move.r][path[i].move.c] = EMPTY;
+        }
+    }
+
+    const children = root.children || [];
+    const proven = root.pn === 0 ? children.find((child) => child.pn === 0) : null;
+    let mostProving = null;
+    for (const child of children) {
+        if (child.dn === 0) continue;
+        if (!mostProving || child.pn < mostProving.pn || (child.pn === mostProving.pn && child.dn > mostProving.dn)) mostProving = child;
+    }
+    return {
+        proven: !!proven,
+        disproven: root.dn === 0,
+        move: proven ? proven.move : null,
+        mostProvingMove: mostProving ? mostProving.move : null,
+        evaluations,
+        elapsedMs: Date.now() - startedAt
+    };
+}
+
 function createsDoubleThreat(board, r, c, player) {
     if (board[r]?.[c] !== EMPTY) return false;
     const test = cloneBoard(board);
@@ -1198,8 +1405,11 @@ function chooseMove(board, payload) {
     if (fourThreeForkDefense) return fourThreeForkDefense;
 
     // Seize the initiative when we have a forced win of our own: continuous
-    // threats leave the opponent no tempo to execute theirs.
+    // threats leave the opponent no tempo to execute theirs. VCF (fours only)
+    // is cheap and deep, so try it first; VCT (threes and fours) second.
     if (payload.isHard) {
+        const myVcf = findVcfSequence(boardCopy, aiPlayer, humanPlayer, 12, { nodes: 6000 });
+        if (myVcf) return myVcf.move;
         const myForcedWin = findForcedWinSequence(boardCopy, aiPlayer, humanPlayer, forcedWinDepth, { nodes: FORCED_WIN_NODE_BUDGET });
         if (myForcedWin) return myForcedWin.move;
     }
@@ -1218,6 +1428,15 @@ function chooseMove(board, payload) {
     if (payload.isHard) {
         const preemptiveForkDefense = findPreemptiveForkDefense(boardCopy, aiPlayer);
         if (preemptiveForkDefense) return preemptiveForkDefense;
+    }
+
+    // Allis: proof-number search over the full tree with threat-space search
+    // as the evaluator. A proven root means the move leads to a forced win
+    // even against non-forced (quiet) defences that VCF/VCT alone cannot see.
+    let pnsResult = null;
+    if (payload.isHard) {
+        pnsResult = proofNumberSearch(boardCopy, aiPlayer, humanPlayer, { maxNodes: 400, timeLimitMs: 1000, tssDepth: 3 });
+        if (pnsResult.proven && pnsResult.move) return pnsResult.move;
     }
 
     if (payload.isHard) {
@@ -1244,6 +1463,14 @@ function chooseMove(board, payload) {
                 }
             }
             if (bestBlock) return bestBlock;
+        }
+
+        // Not proven yet: steer toward the branch PNS found cheapest to prove,
+        // provided it does not walk into a forced loss.
+        const steer = pnsResult?.mostProvingMove;
+        if (steer && boardCopy[steer.r]?.[steer.c] === EMPTY
+            && moveAvoidsForcedLoss(boardCopy, steer.r, steer.c, aiPlayer, humanPlayer, forcedWinDepth)) {
+            return steer;
         }
     }
 
@@ -1380,6 +1607,8 @@ if (typeof module !== 'undefined' && module.exports) {
         findForcedWinSequence,
         findForcedLossDefense,
         moveAvoidsForcedLoss,
+        findVcfSequence,
+        proofNumberSearch,
         chooseMove,
         handleMessage
     };

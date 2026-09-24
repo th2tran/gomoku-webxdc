@@ -8,7 +8,8 @@ Gomoku WebXDC is a browser-based Gomoku (Five in a Row) game packaged as a WebXD
 - Local pass-and-play mode
 - Local vs computer mode
 - Network mode for two players over WebXDC
-- Tournament mode with paired rounds and standings
+- Tournament mode with concurrent paired rounds and standings
+- "Games In Progress" panel to follow every active game and spectate any of them
 - Move timer for timed network turns
 - In-app chat panel for messaging peers, plus status updates for join/leave events
 - Scoreboard tracking by connected peer
@@ -32,13 +33,13 @@ When the app runs in a WebXDC environment, it can discover peers and maintain a 
 - synchronize resets and tournament mode changes
 - notify when a player leaves or forfeits
 
-Network mode is designed for two active players, while additional players can observe or join as spectators depending on the current game flow.
+In network mode, any peer can start a game by tapping another peer in the connected-players list and sending a challenge; once accepted, the pair is seated. Several 2-player games can run at the same time in one chat. Every game broadcasts its state to all peers, and the **Games In Progress** panel lists them; a peer who is not currently playing can tap any listed game to spectate it live.
 
 ### Tournament mode
 
-Tournament mode creates a round-robin schedule among connected peers and pairs players into matches. Each match is initialized with randomized black/white seat assignment. The app tracks:
+Tournament mode creates a round-robin schedule among connected peers and splits it into rounds of disjoint pairings, so all matches in a round are played concurrently (with a bye for one player when the count is odd). The next round starts automatically once every match in the current round has finished. Each match is initialized with randomized black/white seat assignment. Players with a bye can spectate any ongoing match; when their own match begins, the board switches to it automatically and a toast alerts them. A peer who leaves mid-tournament forfeits their remaining matches. The app tracks:
 
-- current pairings
+- current round and pairings
 - match countdown before the tournament starts
 - move timers for the active player
 - standings and win counts

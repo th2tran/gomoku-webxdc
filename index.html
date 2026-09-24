@@ -184,6 +184,132 @@
             text-overflow: ellipsis;
             white-space: nowrap;
         }
+        .connected-peers-item.clickable {
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .connected-peers-item.clickable:hover {
+            background: #3d566e;
+        }
+        .games-in-progress-panel {
+            width: 100%;
+            max-width: 600px;
+            margin: 0 0 14px 0;
+            padding: 10px 12px;
+            background: #34495e;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            font-size: 14px;
+            display: flex;
+            flex-direction: column;
+        }
+        .games-in-progress-panel h3 {
+            margin: 0 0 8px 0;
+            font-size: 15px;
+            color: #f1c40f;
+            flex-shrink: 0;
+        }
+        .games-in-progress-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .games-in-progress-empty {
+            color: #c8d6e5;
+            font-style: italic;
+        }
+        .game-in-progress-item {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            padding: 6px 8px;
+            background: #2c3e50;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            text-align: left;
+            color: #ecf0f1;
+            font-size: 13px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .game-in-progress-item.clickable {
+            cursor: pointer;
+        }
+        .game-in-progress-item.clickable:hover {
+            background: #3d566e;
+        }
+        .game-in-progress-item.focused {
+            border-color: #f1c40f;
+        }
+        .game-in-progress-item.mine {
+            border-color: #27ae60;
+        }
+        .game-in-progress-players {
+            font-weight: 700;
+        }
+        .game-in-progress-meta {
+            color: #9eb4c8;
+            font-size: 11px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .game-in-progress-badge {
+            align-self: flex-start;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            padding: 1px 6px;
+            border-radius: 999px;
+            background: #52677d;
+            color: #e3e3e3;
+        }
+        .game-in-progress-badge.spectating { background: #8e44ad; }
+        .game-in-progress-badge.playing { background: #27ae60; }
+        .game-in-progress-badge.finished { background: #7f8c8d; }
+        .toast-stack {
+            position: fixed;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 400;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: center;
+            pointer-events: none;
+            width: min(92vw, 460px);
+        }
+        .toast {
+            pointer-events: auto;
+            background: #1f2d3a;
+            border: 1px solid #4a6075;
+            border-left: 4px solid #f1c40f;
+            border-radius: 8px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.45);
+            color: #ecf0f1;
+            padding: 10px 14px;
+            font-size: 14px;
+            line-height: 1.35;
+            max-width: 100%;
+            opacity: 0;
+            transform: translateY(-8px);
+            transition: opacity 0.18s ease, transform 0.18s ease;
+        }
+        .toast.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .toast.toast-success { border-left-color: #27ae60; }
+        .toast.toast-warning { border-left-color: #e67e22; }
+        .toast.toast-info { border-left-color: #3498db; }
+        #board.spectating {
+            box-shadow: 0 0 0 3px #8e44ad, 0 4px 10px rgba(0,0,0,0.4);
+        }
+        #board.spectating .cell {
+            cursor: not-allowed;
+        }
         .current-match-panel {
             width: 100%;
             max-width: 600px;
@@ -1108,6 +1234,14 @@
             .game-history-list {
                 max-height: 40vh;
             }
+            .games-in-progress-panel {
+                max-width: 100%;
+                margin: 0;
+            }
+            .games-in-progress-list {
+                max-height: 30vh;
+                overflow-y: auto;
+            }
 
             .all-players-scoreboard,
             .current-match-panel,
@@ -1169,6 +1303,12 @@
                 <h3>Connected Peers</h3>
                 <div class="connected-peers-list" id="connected-peers-list">
                     <div class="connected-peers-empty">No peers connected.</div>
+                </div>
+            </div>
+            <div class="games-in-progress-panel" id="games-in-progress-panel">
+                <h3>Games In Progress</h3>
+                <div class="games-in-progress-list" id="games-in-progress-list">
+                    <div class="games-in-progress-empty">No games in progress.</div>
                 </div>
             </div>
             <div class="game-history-panel" id="game-history-panel">
@@ -1350,6 +1490,8 @@
         </div>
     </div>
 
+    <div class="toast-stack" id="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
     <script src="js/version.js"></script>
     <script>
         const boardSize = 15;
@@ -1371,9 +1513,689 @@
             : 'local_user';
         let myName = window.webxdc ? (window.webxdc.selfName || 'Player') : 'Player';
 
+        // ------------------------------------------------------------------
+        // Multi-game registry (concurrent games + spectating).
+        //
+        // The existing single-game globals (board, currentPlayer, networkPlayers,
+        // gameOver, lastPlacedMove, turnDeadlineTs, playerDeadlineTs,
+        // currentGameMoveLog, p1/p2 name inputs) act as the live working set for
+        // the *focused* game. Every other in-progress game lives here as a
+        // headless record that is kept in sync from network updates without
+        // touching the board DOM. Switching focus snapshots the current focused
+        // game back into its record and hydrates the target record into the
+        // globals.
+        // ------------------------------------------------------------------
+        const games = new Map(); // gameId -> game record
+        let focusedGameId = null;
+        const DEFAULT_GAME_ID = 'g:legacy-default';
+
+        function makeGameId() {
+            return `g:${myPeerId.slice(-6)}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`;
+        }
+
+        function createGameRecord(id, extra = {}) {
+            const record = {
+                id,
+                mode: extra.mode || 'webxdc',
+                board: extra.board || Array(boardSize).fill(null).map(() => Array(boardSize).fill(0)),
+                currentPlayer: extra.currentPlayer || 1,
+                players: { 1: extra.players?.[1] || null, 2: extra.players?.[2] || null },
+                playerAddrs: { 1: extra.playerAddrs?.[1] || null, 2: extra.playerAddrs?.[2] || null },
+                names: { 1: extra.names?.[1] || 'Player 1', 2: extra.names?.[2] || 'Player 2' },
+                gameOver: !!extra.gameOver,
+                winnerPlayer: extra.winnerPlayer || null,
+                moveCount: extra.moveCount || 0,
+                lastMove: extra.lastMove || null,
+                turnDeadlineTs: extra.turnDeadlineTs || null,
+                createdAt: extra.createdAt || Date.now(),
+                updatedAt: Date.now(),
+                round: Number.isInteger(extra.round) ? extra.round : null,
+                moveLog: Array.isArray(extra.moveLog) ? extra.moveLog : []
+            };
+            games.set(id, record);
+            return record;
+        }
+
+        function getGameRecord(id) {
+            if (!id) return null;
+            return games.get(id) || null;
+        }
+
+        function peerIsGameParticipant(record, peerId = myPeerId) {
+            if (!record || !peerId) return false;
+            return [record.players[1], record.players[2]].some((pid) => {
+                if (!pid) return false;
+                if (pid === peerId) return true;
+                const addr = connectedPlayers[peerId]?.addr || (peerId === myPeerId ? myAddr : null);
+                return getCanonicalPeerId(pid, connectedPlayers[pid]?.addr || null) === getCanonicalPeerId(peerId, addr);
+            });
+        }
+
+        function localSeatInRecord(record) {
+            if (!record) return null;
+            if (peerRepresentsLocalPlayer(record.players[1])) return 1;
+            if (peerRepresentsLocalPlayer(record.players[2])) return 2;
+            return null;
+        }
+
+        let toastCounter = 0;
+        function showToast(message, options = {}) {
+            if (!toastStackEl || !message) return;
+            const toast = document.createElement('div');
+            const variant = options.variant || 'info';
+            toast.className = `toast toast-${variant}`;
+            toast.textContent = String(message);
+            const id = `toast-${++toastCounter}`;
+            toast.dataset.toastId = id;
+            if (options.onClick) {
+                toast.style.cursor = 'pointer';
+                toast.addEventListener('click', () => {
+                    try { options.onClick(); } finally { dismissToast(toast); }
+                });
+            }
+            toastStackEl.appendChild(toast);
+            requestAnimationFrame(() => toast.classList.add('visible'));
+            const duration = Number.isFinite(options.duration) ? options.duration : 5000;
+            if (duration > 0) {
+                setTimeout(() => dismissToast(toast), duration);
+            }
+            return toast;
+        }
+        function dismissToast(toast) {
+            if (!toast || !toast.parentNode) return;
+            toast.classList.remove('visible');
+            setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 200);
+        }
+
+        function isNetworkMode() {
+            return gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament';
+        }
+
+        // Write the live globals of the focused game back into its record.
+        function snapshotFocusedGame() {
+            if (!focusedGameId) return;
+            const rec = games.get(focusedGameId);
+            if (!rec) return;
+            rec.board = board.map((row) => row.slice());
+            rec.currentPlayer = currentPlayer;
+            rec.players = { 1: networkPlayers[1], 2: networkPlayers[2] };
+            rec.playerAddrs = { 1: getAddrForPeer(networkPlayers[1]), 2: getAddrForPeer(networkPlayers[2]) };
+            rec.names = { 1: p1NameInput.value, 2: p2NameInput.value };
+            rec.gameOver = gameOver;
+            rec.winnerPlayer = gameOver ? currentPlayer : null;
+            rec.moveCount = countMoves(board);
+            rec.lastMove = lastPlacedMove ? { r: lastPlacedMove.r, c: lastPlacedMove.c, player: lastPlacedMove.player } : null;
+            rec.turnDeadlineTs = turnDeadlineTs;
+            rec.moveLog = currentGameMoveLog.slice();
+            rec.updatedAt = Date.now();
+        }
+
+        // Load a record into the live globals and repaint the board/UI.
+        function hydrateFocusedGame(rec) {
+            if (!rec) return;
+            focusedGameId = rec.id;
+            board = rec.board.map((row) => row.slice());
+            currentPlayer = rec.currentPlayer;
+            networkPlayers = { 1: rec.players[1], 2: rec.players[2] };
+            gameOver = rec.gameOver;
+            lastPlacedMove = rec.lastMove ? { r: rec.lastMove.r, c: rec.lastMove.c, player: rec.lastMove.player } : null;
+            turnDeadlineTs = rec.turnDeadlineTs || null;
+            currentGameMoveLog = Array.isArray(rec.moveLog) ? rec.moveLog.slice() : [];
+            for (const seat of [1, 2]) {
+                const input = seat === 1 ? p1NameInput : p2NameInput;
+                if (rec.names[seat]) input.value = rec.names[seat];
+                else if (rec.players[seat]) input.value = displayNameForPeer(rec.players[seat]);
+            }
+            syncMyAssignedPlayer();
+            renderBoardFromState();
+            renderMoveList(currentGameMoveLog);
+            if (lastPlacedMove) highlightLastMove(lastPlacedMove.r, lastPlacedMove.c);
+            updateTurnIndicator();
+            updateCurrentMatchDisplay();
+        }
+
+        function highlightLastMove(r, c) {
+            document.querySelectorAll('.cell .piece.last-move').forEach((p) => p.classList.remove('last-move'));
+            const cell = document.querySelector(`.cell[data-row="${r}"][data-col="${c}"] .piece`);
+            if (cell) cell.classList.add('last-move');
+        }
+
+        // Switch which game the board is showing. Snapshots the current one first.
+        function focusGame(id, options = {}) {
+            const rec = games.get(id);
+            if (!rec) return false;
+            if (focusedGameId === id) {
+                if (options.repaint) renderBoardFromState();
+                return true;
+            }
+            snapshotFocusedGame();
+            hydrateFocusedGame(rec);
+            updateSpectatorBanner();
+            updateGamesInProgressPanel();
+            if (options.toast) {
+                showToast(options.toast, { variant: options.toastVariant || 'info' });
+            }
+            return true;
+        }
+
+        function isSpectatingFocusedGame() {
+            if (!isNetworkMode()) return false;
+            const rec = games.get(focusedGameId);
+            if (!rec) return false;
+            // An empty lobby board (no seated players) is idle, not spectating.
+            if (!rec.players[1] && !rec.players[2]) return false;
+            return localSeatInRecord(rec) === null;
+        }
+
+        function updateSpectatorBanner() {
+            const spectating = isSpectatingFocusedGame();
+            if (boardElement) boardElement.classList.toggle('spectating', spectating);
+        }
+
+        // ---- Headless apply for non-focused (background) games ----
+        function applyMoveToRecord(rec, r, c, player) {
+            if (!rec || !isOnBoard(r, c)) return;
+            if (rec.board[r][c] === player) return;
+            rec.board[r][c] = player;
+            rec.lastMove = { r, c, player };
+            rec.moveCount = countMoves(rec.board);
+            rec.moveLog.push({ moveNumber: rec.moveLog.length + 1, r, c, player, at: Date.now() });
+            if (checkWinOnBoardState(rec.board, r, c, player)) {
+                rec.gameOver = true;
+                rec.winnerPlayer = player;
+                rec.turnDeadlineTs = null;
+            } else {
+                rec.currentPlayer = player === 1 ? 2 : 1;
+            }
+            rec.updatedAt = Date.now();
+        }
+
+        function applyStateToRecord(rec, state) {
+            if (!rec || !state) return;
+            if (Array.isArray(state.board)) rec.board = state.board.map((row) => row.slice());
+            if (Number.isInteger(state.currentPlayer)) rec.currentPlayer = state.currentPlayer;
+            if (state.networkPlayers) {
+                rec.players = { 1: state.networkPlayers[1] || rec.players[1], 2: state.networkPlayers[2] || rec.players[2] };
+            }
+            if (state.networkPlayerAddrs) {
+                rec.playerAddrs = { 1: state.networkPlayerAddrs[1] || rec.playerAddrs[1], 2: state.networkPlayerAddrs[2] || rec.playerAddrs[2] };
+            }
+            if (state.p1Name) rec.names[1] = state.p1Name;
+            if (state.p2Name) rec.names[2] = state.p2Name;
+            if (typeof state.gameOver === 'boolean') rec.gameOver = state.gameOver;
+            if (state.winnerPlayer === 1 || state.winnerPlayer === 2) rec.winnerPlayer = state.winnerPlayer;
+            else if (state.gameOver === false) rec.winnerPlayer = null;
+            rec.moveCount = countMoves(rec.board);
+            if (state.lastMove) rec.lastMove = { r: state.lastMove.r, c: state.lastMove.c, player: state.lastMove.player };
+            if (Number.isFinite(state.turnDeadlineTs) || state.turnDeadlineTs === null) rec.turnDeadlineTs = state.turnDeadlineTs;
+            if (Number.isInteger(state.round)) rec.round = state.round;
+            rec.updatedAt = Date.now();
+        }
+
+        // Resolve the game a payload targets, creating a background record if needed.
+        function resolveGameForPayload(payload) {
+            const gid = (payload && typeof payload.gameId === 'string' && payload.gameId) ? payload.gameId : DEFAULT_GAME_ID;
+            let rec = games.get(gid);
+            if (!rec) {
+                rec = createGameRecord(gid, { mode: payload.gameMode || gameModeSelect.value });
+            }
+            return rec;
+        }
+
+        function activeGamesForDisplay() {
+            const list = [];
+            const roundsActive = tournamentRoundsActive();
+            for (const rec of games.values()) {
+                if (rec.id === DEFAULT_GAME_ID && rec.moveCount === 0 && !rec.players[1] && !rec.players[2]) continue;
+                // During a round-based tournament only the current round's matches are relevant.
+                if (roundsActive && rec.mode === 'webxdc-tournament'
+                    && (rec.round !== tournamentState.roundIndex || (rec.cycle || 0) !== (tournamentState.cycle || 0))) continue;
+                list.push(rec);
+            }
+            list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+            return list;
+        }
+
+        function updateGamesInProgressPanel() {
+            if (!gamesInProgressListEl) return;
+            snapshotFocusedGame();
+            const list = activeGamesForDisplay();
+            gamesInProgressListEl.innerHTML = '';
+            if (!list.length) {
+                const empty = document.createElement('div');
+                empty.className = 'games-in-progress-empty';
+                empty.textContent = isNetworkMode() ? 'No games in progress.' : 'Switch to a Network mode to see live games.';
+                gamesInProgressListEl.appendChild(empty);
+                return;
+            }
+            for (const rec of list) {
+                const mySeat = localSeatInRecord(rec);
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'game-in-progress-item';
+                if (rec.id === focusedGameId) item.classList.add('focused');
+                if (mySeat) item.classList.add('mine');
+                const canSpectate = !mySeat && rec.id !== focusedGameId;
+                if (canSpectate || rec.id !== focusedGameId) item.classList.add('clickable');
+
+                const players = document.createElement('div');
+                players.className = 'game-in-progress-players';
+                const n1 = displayNameForPeer(rec.players[1]) || rec.names[1] || 'Player 1';
+                const n2 = displayNameForPeer(rec.players[2]) || rec.names[2] || 'Player 2';
+                players.textContent = `${n1} vs ${n2}`;
+                item.appendChild(players);
+
+                const meta = document.createElement('div');
+                meta.className = 'game-in-progress-meta';
+                const turnName = rec.gameOver
+                    ? (rec.winnerPlayer ? `${(displayNameForPeer(rec.players[rec.winnerPlayer]) || rec.names[rec.winnerPlayer])} won` : 'Finished')
+                    : `${(displayNameForPeer(rec.players[rec.currentPlayer]) || rec.names[rec.currentPlayer] || '')}'s turn`;
+                const roundText = Number.isInteger(rec.round) ? `Round ${rec.round + 1} · ` : '';
+                meta.textContent = `${roundText}${rec.moveCount} moves · ${turnName}`;
+                item.appendChild(meta);
+
+                const badge = document.createElement('span');
+                badge.className = 'game-in-progress-badge';
+                if (rec.gameOver) { badge.classList.add('finished'); badge.textContent = 'Finished'; }
+                else if (mySeat) { badge.classList.add('playing'); badge.textContent = rec.id === focusedGameId ? 'Playing' : 'Your game'; }
+                else if (rec.id === focusedGameId) { badge.classList.add('spectating'); badge.textContent = 'Spectating'; }
+                else { badge.textContent = 'Watch'; }
+                item.appendChild(badge);
+
+                item.addEventListener('click', () => {
+                    if (rec.id === focusedGameId) return;
+                    focusGame(rec.id);
+                    showToast(mySeat ? 'Switched to your game.' : `Spectating ${n1} vs ${n2}.`, { variant: mySeat ? 'success' : 'info', duration: 3500 });
+                });
+                gamesInProgressListEl.appendChild(item);
+            }
+        }
+
+        // Apply a game-scoped payload to a NON-focused game record (no board DOM).
+        function handleBackgroundGamePayload(gid, payload, ctx = {}) {
+            let rec = games.get(gid);
+            if (!rec) {
+                rec = createGameRecord(gid, {
+                    mode: payload.gameMode || payload.state?.gameMode || (payload.tournamentReset ? 'webxdc-tournament' : 'webxdc')
+                });
+            }
+            if (payload.action === 'STATE') {
+                applyStateToRecord(rec, payload.state);
+                const st = payload.state || {};
+                // Scores are monotonic; max-merge avoids double counting across games.
+                if (st.playerScores && typeof st.playerScores === 'object') {
+                    let changed = false;
+                    for (const [pid, val] of Object.entries(st.playerScores)) {
+                        if (Number.isFinite(val) && val > (playerScoresByPeer[pid] || 0)) {
+                            playerScoresByPeer[pid] = val;
+                            changed = true;
+                        }
+                    }
+                    if (changed) updateAllPlayersScoreboard();
+                }
+                // Round catch-up: a peer ahead of us already started the next round.
+                if (tournamentRoundsActive() && st.tournamentState
+                    && Number.isInteger(st.tournamentState.roundIndex)
+                    && st.tournamentState.roundIndex !== tournamentState.roundIndex
+                    && (st.tournamentState.cycle || 0) >= (tournamentState.cycle || 0)) {
+                    const remoteCycle = st.tournamentState.cycle || 0;
+                    const ahead = remoteCycle > (tournamentState.cycle || 0)
+                        || st.tournamentState.roundIndex > tournamentState.roundIndex;
+                    if (ahead) {
+                        if (tournamentState.roundAdvanceTimer) {
+                            clearTimeout(tournamentState.roundAdvanceTimer);
+                            tournamentState.roundAdvanceTimer = null;
+                        }
+                        tournamentState.cycle = remoteCycle;
+                        if (Number.isInteger(st.tournamentState.matchNumber)) tournamentState.matchNumber = st.tournamentState.matchNumber;
+                        startTournamentRound(st.tournamentState.roundIndex);
+                        return;
+                    }
+                }
+            } else if (payload.action === 'MOVE') {
+                if (payload.player === 1 || payload.player === 2) {
+                    if (!rec.players[payload.player] && (payload.peerId || ctx.senderPeerId)) {
+                        rec.players[payload.player] = payload.peerId || ctx.senderPeerId;
+                        rec.playerAddrs[payload.player] = ctx.senderAddr || rec.playerAddrs[payload.player];
+                        if (payload.name) rec.names[payload.player] = payload.name;
+                    }
+                    applyMoveToRecord(rec, payload.r, payload.c, payload.player);
+                }
+            } else if (payload.action === 'RESET') {
+                rec.board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
+                rec.gameOver = false;
+                rec.winnerPlayer = null;
+                rec.moveCount = 0;
+                rec.lastMove = null;
+                rec.currentPlayer = 1;
+                rec.moveLog = [];
+                rec.updatedAt = Date.now();
+            } else if (payload.action === 'TIMEOUT') {
+                rec.gameOver = true;
+                rec.winnerPlayer = payload.winnerPlayer === 2 ? 2 : 1;
+                rec.updatedAt = Date.now();
+            } else if (payload.action === 'WITHDRAWAL') {
+                rec.gameOver = true;
+                rec.updatedAt = Date.now();
+            }
+            updateGamesInProgressPanel();
+            maybeAutoSwitchToMyGame(rec);
+            if (rec.gameOver) maybeAdvanceTournamentRound();
+        }
+
+        // Auto-switch the board to the local player's game when it becomes their turn
+        // while they are idle or spectating another game.
+        function maybeAutoSwitchToMyGame(rec) {
+            if (!rec || rec.gameOver) return;
+            const mySeat = localSeatInRecord(rec);
+            if (!mySeat) return;
+            if (rec.id === focusedGameId) return;
+            const focusedRec = games.get(focusedGameId);
+            const focusedIsMineActive = focusedRec && localSeatInRecord(focusedRec) && !focusedRec.gameOver;
+            const myTurn = rec.currentPlayer === mySeat;
+            if (myTurn && (!focusedIsMineActive || isSpectatingFocusedGame())) {
+                const oppName = displayNameForPeer(rec.players[mySeat === 1 ? 2 : 1]) || rec.names[mySeat === 1 ? 2 : 1];
+                focusGame(rec.id, { toast: `Your turn vs ${oppName} — switched to your board.`, toastVariant: 'success' });
+            }
+        }
+
+        // -------------------- Challenge-based matchmaking (2-player) --------------------
+        const pendingOutgoingChallenges = new Map(); // gameId -> {targetPeerId, targetName, seats, addrs, names, at}
+        const pendingIncomingChallenges = new Map(); // gameId -> {challengerPeerId, challengerName, seats, seatAddrs, seatNames, at}
+
+        function challengePeer(targetPeerId, targetName) {
+            if (!window.webxdc) { showToast('Networking is unavailable.', { variant: 'warning' }); return; }
+            if (gameModeSelect.value !== 'webxdc') { showToast('Switch to Network (2 players) to challenge.', { variant: 'warning' }); return; }
+            if (!targetPeerId || peerRepresentsLocalPlayer(targetPeerId)) return;
+            const focusedRec = games.get(focusedGameId);
+            if (focusedRec && localSeatInRecord(focusedRec) && !focusedRec.gameOver) {
+                showToast('Finish or leave your current game before starting another.', { variant: 'warning' });
+                return;
+            }
+            const targetAddr = connectedPlayers[targetPeerId]?.addr || null;
+            const gameId = makeGameId();
+            const challengerFirst = Math.random() < 0.5;
+            const seats = challengerFirst ? { 1: myPeerId, 2: targetPeerId } : { 1: targetPeerId, 2: myPeerId };
+            const addrs = { 1: seats[1] === myPeerId ? myAddr : targetAddr, 2: seats[2] === myPeerId ? myAddr : targetAddr };
+            const names = { 1: seats[1] === myPeerId ? myName : targetName, 2: seats[2] === myPeerId ? myName : targetName };
+            pendingOutgoingChallenges.set(gameId, { targetPeerId, targetName, seats, addrs, names, at: Date.now() });
+            sendXdcUpdate({
+                action: 'CHALLENGE', gameId,
+                challengerPeerId: myPeerId, challengerAddr: myAddr, challengerName: myName,
+                targetPeerId, targetAddr,
+                seats, seatAddrs: addrs, seatNames: names,
+                addr: myAddr, name: myName, peerId: myPeerId
+            }, `${myName} challenged ${targetName} to a game.`, `${myName} challenged ${targetName}.`);
+            showToast(`Challenge sent to ${targetName}. Waiting for them to accept…`, { variant: 'info', duration: 6000 });
+        }
+
+        function handleChallengePayload(payload, senderPeerId, senderAddr) {
+            const forMe = payload.targetPeerId === myPeerId
+                || (payload.targetAddr && normalizeAddr(payload.targetAddr) === normalizeAddr(myAddr));
+            if (!forMe) return;
+            const gameId = payload.gameId;
+            if (!gameId || games.has(gameId)) return;
+            pendingIncomingChallenges.set(gameId, {
+                challengerPeerId: payload.challengerPeerId || senderPeerId,
+                challengerName: payload.challengerName || getUpdateNameFallback(senderPeerId),
+                seats: payload.seats, seatAddrs: payload.seatAddrs, seatNames: payload.seatNames,
+                at: Date.now()
+            });
+            const challengerName = payload.challengerName || 'A player';
+            showToast(`${challengerName} challenges you to a game — tap to accept.`, {
+                variant: 'info', duration: 20000, onClick: () => acceptChallenge(gameId)
+            });
+            addNotification(`${challengerName} challenged you to a game.`, { kind: 'system', broadcast: false });
+        }
+
+        function getUpdateNameFallback(peerId) {
+            return displayNameForPeer(peerId) || 'A player';
+        }
+
+        function acceptChallenge(gameId) {
+            const ch = pendingIncomingChallenges.get(gameId);
+            if (!ch) return;
+            pendingIncomingChallenges.delete(gameId);
+            createGameRecord(gameId, { mode: 'webxdc', players: ch.seats, playerAddrs: ch.seatAddrs, names: ch.seatNames });
+            gameModeSelect.value = 'webxdc';
+            focusGame(gameId);
+            sendXdcUpdate({
+                action: 'CHALLENGE_ACCEPT', gameId,
+                seats: ch.seats, seatAddrs: ch.seatAddrs, seatNames: ch.seatNames,
+                addr: myAddr, name: myName, peerId: myPeerId
+            }, `${myName} accepted the challenge.`, '');
+            showToast(`Game started vs ${ch.challengerName}!`, { variant: 'success' });
+            startMoveTimerForCurrentTurn({ resetDeadline: true });
+            broadcastStateSync('challenge-accept');
+            updateGamesInProgressPanel();
+        }
+
+        function handleChallengeAcceptPayload(payload, senderPeerId) {
+            const gameId = payload.gameId;
+            const out = pendingOutgoingChallenges.get(gameId);
+            if (!out) return;
+            pendingOutgoingChallenges.delete(gameId);
+            if (!games.has(gameId)) {
+                createGameRecord(gameId, { mode: 'webxdc', players: out.seats, playerAddrs: out.addrs, names: out.names });
+            }
+            gameModeSelect.value = 'webxdc';
+            focusGame(gameId);
+            showToast(`${out.targetName} accepted — game on!`, { variant: 'success' });
+            startMoveTimerForCurrentTurn({ resetDeadline: true });
+            broadcastStateSync('challenge-start');
+            updateGamesInProgressPanel();
+        }
+
+        // -------------------- Round-based concurrent tournament --------------------
+        // Each round is a set of disjoint pairs that play at the same time. Rounds and
+        // per-match game IDs are derived deterministically from the sorted roster and
+        // the shared seat seed, so every peer builds identical records with no extra
+        // coordination. Each peer independently detects round completion from the
+        // synced records and advances in lockstep.
+
+        function tournamentRoundsActive() {
+            return gameModeSelect.value === 'webxdc-tournament'
+                && Array.isArray(tournamentState.rounds) && tournamentState.rounds.length > 0;
+        }
+
+        function tournamentPeersFromSchedule(schedule) {
+            const set = new Set();
+            for (const pair of (schedule || [])) {
+                if (Array.isArray(pair)) for (const p of pair) if (p) set.add(p);
+            }
+            return Array.from(set).sort((a, b) => a.localeCompare(b));
+        }
+
+        // Circle-method round robin. Odd rosters get a null "bye" slot.
+        function buildTournamentRounds(peers) {
+            const list = peers.slice().sort((a, b) => a.localeCompare(b));
+            if (list.length < 2) return [];
+            if (list.length % 2 === 1) list.push(null);
+            const n = list.length;
+            const rounds = [];
+            const rotating = list.slice();
+            for (let r = 0; r < n - 1; r++) {
+                const round = [];
+                for (let i = 0; i < n / 2; i++) {
+                    const a = rotating[i];
+                    const b = rotating[n - 1 - i];
+                    if (a && b) round.push([a, b].sort((x, y) => x.localeCompare(y)));
+                }
+                rounds.push(round);
+                // rotate all but the first element
+                rotating.splice(1, 0, rotating.pop());
+            }
+            return rounds;
+        }
+
+        // Deterministic seat order for a round match. Hashes only the shared schedule
+        // peerIds (never addrs, which some peers may not have learned yet).
+        function roundMatchSeats(pair, roundIndex) {
+            const sorted = pair.slice().sort((a, b) => a.localeCompare(b));
+            const input = `${tournamentState.seatSeed || 'seed'}:${tournamentState.matchNumber || 0}:r${roundIndex}:${sorted[0]}|${sorted[1]}`;
+            let hash = 0;
+            for (let i = 0; i < input.length; i++) hash = ((hash * 31) + input.charCodeAt(i)) >>> 0;
+            return (hash % 2) === 0 ? sorted : [sorted[1], sorted[0]];
+        }
+
+        function tournamentMatchGameId(roundIndex, pair) {
+            const sorted = pair.slice().sort((a, b) => a.localeCompare(b));
+            return `t:${tournamentState.seatSeed || 'seed'}:c${tournamentState.cycle || 0}:r${roundIndex}:${sorted[0]}|${sorted[1]}`;
+        }
+
+        function currentRoundRecords() {
+            if (!tournamentRoundsActive()) return [];
+            const round = tournamentState.rounds[tournamentState.roundIndex] || [];
+            return round.map((pair) => games.get(tournamentMatchGameId(tournamentState.roundIndex, pair))).filter(Boolean);
+        }
+
+        function startTournamentRound(roundIndex, { announce = true } = {}) {
+            if (!Array.isArray(tournamentState.rounds) || !tournamentState.rounds.length) return;
+            const idx = ((roundIndex % tournamentState.rounds.length) + tournamentState.rounds.length) % tournamentState.rounds.length;
+            tournamentState.roundIndex = idx;
+            tournamentState.roundAdvanceTimer = null;
+            const round = tournamentState.rounds[idx];
+            snapshotFocusedGame();
+            tournamentPlayerAddrLock.clear();
+
+            let myGameId = null;
+            let firstGameId = null;
+            for (const pair of round) {
+                const gid = tournamentMatchGameId(idx, pair);
+                const seats = roundMatchSeats(pair, idx);
+                let rec = games.get(gid);
+                if (!rec) {
+                    rec = createGameRecord(gid, { mode: 'webxdc-tournament', round: idx });
+                }
+                rec.mode = 'webxdc-tournament';
+                rec.round = idx;
+                rec.cycle = tournamentState.cycle || 0;
+                rec.players = { 1: seats[0] || null, 2: seats[1] || null };
+                rec.playerAddrs = { 1: getAddrForPeer(rec.players[1]), 2: getAddrForPeer(rec.players[2]) };
+                rec.names = { 1: resolvedNameOrNull(rec.players[1]), 2: resolvedNameOrNull(rec.players[2]) };
+                for (const seat of [1, 2]) {
+                    const addr = rec.playerAddrs[seat];
+                    if (addr) tournamentPlayerAddrLock.set(normalizeAddr(addr), rec.players[seat]);
+                }
+                // A peer who left mid-tournament forfeits: award a walkover so the
+                // round can still complete instead of waiting on a seat that is empty.
+                if (!rec.gameOver && tournamentState.departed instanceof Set) {
+                    const p1Gone = tournamentState.departed.has(rec.players[1]);
+                    const p2Gone = tournamentState.departed.has(rec.players[2]);
+                    if (p1Gone || p2Gone) {
+                        rec.gameOver = true;
+                        rec.winnerPlayer = p1Gone && p2Gone ? null : p1Gone ? 2 : 1;
+                        rec.updatedAt = Date.now();
+                    }
+                }
+                if (!firstGameId) firstGameId = gid;
+                if (localSeatInRecord(rec)) myGameId = gid;
+            }
+
+            // Drop stale lobby/legacy records so the panel only shows this tournament.
+            for (const [gid, rec] of games) {
+                if (rec.mode !== 'webxdc-tournament' && gid !== focusedGameId) games.delete(gid);
+            }
+
+            const target = myGameId || firstGameId;
+            if (target) {
+                const rec = games.get(target);
+                focusedGameId = null; // force a hydrate even if the id matches
+                hydrateFocusedGame(rec);
+                updateSpectatorBanner();
+                gameStartAnnounced = false;
+                if (myGameId && announce) {
+                    const mySeat = localSeatInRecord(rec);
+                    const opp = displayNameForPeer(rec.players[mySeat === 1 ? 2 : 1]);
+                    const youStart = rec.currentPlayer === mySeat;
+                    showToast(`Round ${idx + 1}: your match vs ${opp} is about to begin${youStart ? ' — you play first (Black).' : '.'}`, { variant: 'success', duration: 7000 });
+                    addNotification(`Round ${idx + 1} started: you play ${opp}.`, { id: `round-start:${target}:${myPeerId}`, at: Date.now(), broadcast: false });
+                } else if (!myGameId && announce) {
+                    showToast(`Round ${idx + 1}: you have a bye this round. Tap a game to spectate.`, { variant: 'info', duration: 6000 });
+                }
+            }
+            stopMoveTimerInterval();
+            turnDeadlineTs = null;
+            startMoveTimerForCurrentTurn({ resetDeadline: true });
+            updateTurnIndicator();
+            updateTournamentMatchDisplay();
+            updateAllPlayersScoreboard();
+            updateGamesInProgressPanel();
+            debugLog('TOURNAMENT_ROUND_STARTED', { roundIndex: idx, matches: round.length, myGameId });
+            // Every match may already be decided by walkovers; keep the schedule moving.
+            maybeAdvanceTournamentRound();
+        }
+
+        function maybeAdvanceTournamentRound() {
+            if (!tournamentRoundsActive() || tournamentState.finished) return;
+            if (tournamentState.roundAdvanceTimer) return;
+            const recs = currentRoundRecords();
+            const round = tournamentState.rounds[tournamentState.roundIndex] || [];
+            if (!round.length || recs.length < round.length) return;
+            if (!recs.every((r) => r.gameOver)) return;
+
+            if (isTournamentClockExpired(Date.now())) {
+                tournamentState.roundAdvanceTimer = setTimeout(() => finalizeTournament(), 5000);
+                return;
+            }
+            const nextIndex = tournamentState.roundIndex + 1;
+            const completedCycle = nextIndex >= tournamentState.rounds.length;
+            tournamentState.roundAdvanceTimer = setTimeout(() => {
+                tournamentState.roundAdvanceTimer = null;
+                if (gameModeSelect.value !== 'webxdc-tournament' || tournamentState.finished) return;
+                if (isTournamentClockExpired(Date.now())) { finalizeTournament(); return; }
+                if (completedCycle) {
+                    tournamentState.cycle = (tournamentState.cycle || 0) + 1;
+                    stopFireworks();
+                    addNotification(`Round-robin completed. Starting round-robin #${tournamentState.cycle + 1} before tournament time runs out.`, {
+                        id: `tournament-round-robin:${tournamentState.cycle}`, at: Date.now(), broadcast: false
+                    });
+                }
+                tournamentState.matchNumber = (tournamentState.matchNumber || 1) + 1;
+                tournamentState.matchGraceUntilTs = Date.now() + 12000;
+                startTournamentRound(completedCycle ? 0 : nextIndex);
+                if (window.webxdc) broadcastStateSync('tournament-next-round');
+            }, 5000);
+            showToast(`Round ${tournamentState.roundIndex + 1} complete. Next round starts in 5s…`, { variant: 'info', duration: 4500 });
+        }
+
+        // Mark the focused tournament record finished, then check round completion.
+        function finishFocusedTournamentMatch(winnerPeerId) {
+            const rec = games.get(focusedGameId);
+            if (!rec) return;
+            snapshotFocusedGame();
+            rec.gameOver = true;
+            if (winnerPeerId) {
+                rec.winnerPlayer = peerRepresentsLocalPlayer(winnerPeerId) && localSeatInRecord(rec)
+                    ? localSeatInRecord(rec)
+                    : (rec.players[1] === winnerPeerId ? 1 : rec.players[2] === winnerPeerId ? 2 : rec.winnerPlayer);
+            }
+            updateGamesInProgressPanel();
+            maybeAdvanceTournamentRound();
+        }
+
+        // A participant left: finish every current-round match they were seated in.
+        function finishRoundGamesForLeaver(leftPeerId) {
+            if (!tournamentRoundsActive() || !leftPeerId) return;
+            if (!(tournamentState.departed instanceof Set)) tournamentState.departed = new Set();
+            tournamentState.departed.add(leftPeerId);
+            for (const rec of currentRoundRecords()) {
+                if (rec.gameOver || rec.id === focusedGameId) continue;
+                const seat = rec.players[1] === leftPeerId ? 1 : rec.players[2] === leftPeerId ? 2 : null;
+                if (!seat) continue;
+                rec.gameOver = true;
+                rec.winnerPlayer = seat === 1 ? 2 : 1;
+                rec.updatedAt = Date.now();
+            }
+            updateGamesInProgressPanel();
+            maybeAdvanceTournamentRound();
+        }
+
         const boardElement = document.getElementById('board');
         const allPlayersScoreboard = document.getElementById('all-players-scoreboard');
         const connectedPeersListEl = document.getElementById('connected-peers-list');
+        const gamesInProgressListEl = document.getElementById('games-in-progress-list');
+        const toastStackEl = document.getElementById('toast-stack');
         const gameHistoryPanel = document.getElementById('game-history-panel');
         const gameHistoryList = document.getElementById('game-history-list');
         const gameImportBtn = document.getElementById('game-import-btn');
@@ -1605,7 +2427,15 @@
             // peer-exit monitor won't evict/withdraw the opponent for being "stale". This
             // gives both peers time to exchange a fresh PRESENCE/roster sync right after a
             // match transition, before assuming silence means they left.
-            matchGraceUntilTs: null
+            matchGraceUntilTs: null,
+            // Round-based concurrent play: rounds[] is an array of disjoint pair lists.
+            rounds: [],
+            roundIndex: 0,
+            roundAdvanceTimer: null,
+            // Peers that broadcast LEAVE during this tournament. Later-round matches
+            // against them resolve as walkovers. Driven only by LEAVE messages (never
+            // by roster snapshots) so every peer reaches the same conclusion.
+            departed: new Set()
         };
 
         function getChatInstanceInfo() {
@@ -2770,6 +3600,14 @@
                 const matchNumber = Number.isInteger(tournamentState.matchNumber) && tournamentState.matchNumber > 0
                     ? tournamentState.matchNumber
                     : 1;
+                if (tournamentRoundsActive()) {
+                    const total = tournamentState.rounds.length;
+                    const cycleNote = (tournamentState.cycle || 0) > 0 ? ` · Round-robin #${tournamentState.cycle + 1}` : '';
+                    const rec = games.get(focusedGameId);
+                    const spectating = rec && !localSeatInRecord(rec) ? ' · Spectating' : '';
+                    currentMatchMetaEl.textContent = `Tournament Round ${tournamentState.roundIndex + 1} of ${total}${cycleNote}${spectating}`;
+                    return;
+                }
                 currentMatchMetaEl.textContent = `Tournament Match #${matchNumber}`;
                 return;
             }
@@ -2927,23 +3765,8 @@
             addPeer(networkPlayers[1]);
             addPeer(networkPlayers[2]);
 
-            const remainingPeers = [myPeerId, ...Object.keys(connectedPlayers)]
-                .map((peerId) => {
-                    const record = peerId === myPeerId ? { addr: myAddr } : connectedPlayers[peerId];
-                    return getCanonicalPeerId(peerId, record?.addr || null) || peerId;
-                })
-                .filter(Boolean)
-                .filter((peerId, index, arr) => arr.indexOf(peerId) === index)
-                .sort((a, b) => {
-                    const aName = displayNameForPeer(a);
-                    const bName = displayNameForPeer(b);
-                    return aName.localeCompare(bName) || a.localeCompare(b);
-                });
-
-            for (const peerId of remainingPeers) {
-                addPeer(peerId);
-                if (participants.length >= 2) break;
-            }
+            // Challenge-based pairing: never auto-fill seats from the roster. Only an
+            // already-seated pair (e.g. a Reset inside a challenge game) is reused.
             return participants.slice(0, 2);
         }
 
@@ -2970,6 +3793,8 @@
         function maybeAssignWebxdcSeatsForCurrentGame(reason = 'unknown', participants = null) {
             if (gameModeSelect.value !== 'webxdc') return false;
             if (countMoves(board) > 0 || gameOver) return false;
+            // Seats fixed by a challenge must never be re-shuffled by roster churn.
+            if (networkPlayers[1] && networkPlayers[2]) return false;
             const pair = Array.isArray(participants) && participants.length
                 ? participants.filter(Boolean).slice(0, 2)
                 : getCurrentWebxdcGameParticipants();
@@ -3237,6 +4062,13 @@
                 return;
             }
             tournamentState.enabled = true;
+            // Round-based mode: seats are owned by the round scheduler. Only refresh labels.
+            if (tournamentRoundsActive()) {
+                syncMyAssignedPlayer();
+                setNetworkPlayerLabels();
+                updateTournamentMatchDisplay();
+                return;
+            }
             const activeMatchInProgress = !gameOver && !!networkPlayers[1] && !!networkPlayers[2];
             if (activeMatchInProgress) {
                 tournamentState.pairings = getTournamentPairings();
@@ -3509,6 +4341,10 @@
 
         function advanceTournamentMatch(winnerPeerId) {
             if (gameModeSelect.value !== 'webxdc-tournament' || !tournamentState.enabled) return;
+            if (tournamentRoundsActive()) {
+                finishFocusedTournamentMatch(winnerPeerId);
+                return;
+            }
             tournamentState.pairings = getTournamentPairings();
             if (!Array.isArray(tournamentState.pairings) || !tournamentState.pairings.length) {
                 setTimeout(() => finalizeTournament(), 5000);
@@ -3725,6 +4561,7 @@
                             winnerPlayer,
                             loserPeerId,
                             winnerPeerId,
+                            gameId: focusedGameId || DEFAULT_GAME_ID,
                             addr: myAddr,
                             name: myName,
                             peerId: myPeerId
@@ -4316,6 +5153,10 @@
                 const shouldHandleAsWithdrawal = !!canonicalLeftPeerId && (gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament')
                     && leavingPeerIsCurrentGameParticipant
                     && !gameOver;
+                if (canonicalLeftPeerId && tournamentRoundsActive() && !isSelfSender) {
+                    if (!(tournamentState.departed instanceof Set)) tournamentState.departed = new Set();
+                    tournamentState.departed.add(canonicalLeftPeerId);
+                }
                 if (shouldHandleAsWithdrawal) {
                     const winnerPeerId = leaveWinnerPeerId || [networkPlayers[1], networkPlayers[2]].find((peerId) => {
                         if (!peerId || getCanonicalPeerId(peerId, connectedPlayers[peerId]?.addr || null) === canonicalLeftPeerId) return false;
@@ -4325,6 +5166,9 @@
                         applyWithdrawalResult(canonicalLeftPeerId, winnerPeerId, 'remote-update');
                         return;
                     }
+                }
+                if (canonicalLeftPeerId && tournamentRoundsActive()) {
+                    finishRoundGamesForLeaver(canonicalLeftPeerId);
                 }
                 applyPeerLeft(canonicalLeftPeerId, 'remote-update', payload.leaveEventId, payload.noteText);
                 return;
@@ -4343,6 +5187,28 @@
             }
 
             if (payload.action === 'JOIN' || payload.action === 'PRESENCE') return;
+
+            if (payload.action === 'CHALLENGE') {
+                if (!isSelfSender) handleChallengePayload(payload, senderPeerId, senderAddr);
+                return;
+            }
+            if (payload.action === 'CHALLENGE_ACCEPT') {
+                if (!isSelfSender) handleChallengeAcceptPayload(payload, senderPeerId);
+                return;
+            }
+
+            // Route game-scoped actions to the correct game. Actions targeting a game
+            // other than the focused one are applied headlessly (spectator/background).
+            const isGameScopedAction = payload.action === 'STATE' || payload.action === 'MOVE'
+                || payload.action === 'RESET' || payload.action === 'TIMEOUT' || payload.action === 'WITHDRAWAL';
+            if (isGameScopedAction) {
+                const isTournamentWideReset = payload.action === 'RESET' && !!payload.tournamentReset;
+                const targetGid = (typeof payload.gameId === 'string' && payload.gameId) ? payload.gameId : DEFAULT_GAME_ID;
+                if (!isTournamentWideReset && targetGid !== (focusedGameId || DEFAULT_GAME_ID)) {
+                    handleBackgroundGamePayload(targetGid, payload, { senderPeerId, senderName, senderAddr, isLive });
+                    return;
+                }
+            }
 
             if (payload.action === 'STATE') {
                 applyStatePayload(payload, meta);
@@ -4363,6 +5229,7 @@
                     beginTournamentMode({
                         fromRemote: true,
                         pairIndex: Number.isInteger(payload.pairIndex) ? payload.pairIndex : 0,
+                        roundIndex: Number.isInteger(payload.roundIndex) ? payload.roundIndex : 0,
                         schedule: Array.isArray(payload.schedule) ? payload.schedule : buildTournamentSchedule(),
                         seatSeed: typeof payload.seatSeed === 'string' && payload.seatSeed ? payload.seatSeed : null,
                         countdownDeadlineTs: Number.isFinite(payload.countdownDeadlineTs)
@@ -4528,7 +5395,40 @@
                     }
                 }
             }
+            if (selfAliases.has(peerId) && myName) return myName;
+            // The id may be a canonical alias that is not itself a roster key (e.g. the
+            // peer rejoined with a fresh peerId). Resolve through the addr it maps to.
+            for (const [addr, canonicalId] of canonicalPeerIdByAddr) {
+                if (canonicalId !== peerId) continue;
+                const byAddr = Object.values(connectedPlayers).find((meta) => meta?.name && normalizeAddr(meta.addr) === addr);
+                if (byAddr && typeof byAddr.name === 'string' && byAddr.name.trim()) return byAddr.name.trim();
+            }
+            // Game records carry the names announced by the seat owners themselves.
+            const fromRecord = nameFromGameRecords(peerId);
+            if (fromRecord) return fromRecord;
             return `Player ${peerId.slice(0, 8)}`;
+        }
+
+        function resolvedNameOrNull(peerId) {
+            const n = displayNameForPeer(peerId);
+            return /^Player [\w-]+$/.test(n) ? null : n;
+        }
+
+        function nameFromGameRecords(peerId) {
+            if (!peerId || !(games instanceof Map)) return null;
+            for (const rec of games.values()) {
+                for (const seat of [1, 2]) {
+                    if (rec.players?.[seat] !== peerId) continue;
+                    const n = rec.names?.[seat];
+                    if (typeof n === 'string' && n.trim() && !/^Player [\w-]+$/.test(n.trim())) return n.trim();
+                    const addr = normalizeAddr(rec.playerAddrs?.[seat]);
+                    if (addr) {
+                        const meta = Object.values(connectedPlayers).find((m) => m?.name && normalizeAddr(m.addr) === addr);
+                        if (meta && meta.name.trim()) return meta.name.trim();
+                    }
+                }
+            }
+            return null;
         }
 
         function ensurePlayerScoreEntry(peerId) {
@@ -4835,7 +5735,24 @@
                 const item = document.createElement('div');
                 item.className = 'connected-peers-item';
                 item.textContent = `${peer.name}${peer.isLocal ? ' (you)' : ''}`;
+                if (!peer.isLocal && gameModeSelect.value === 'webxdc') {
+                    item.classList.add('clickable');
+                    item.title = `Challenge ${peer.name} to a game`;
+                    item.addEventListener('click', () => challengePeer(peer.peerId, peer.name));
+                }
                 connectedPeersListEl.appendChild(item);
+            }
+            updateGamesInProgressPanel();
+            // Names may have arrived after seats were assigned; refresh seat labels too.
+            if (gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament') {
+                for (const seat of [1, 2]) {
+                    const input = seat === 1 ? p1NameInput : p2NameInput;
+                    if (networkPlayers[seat] && (!input.value || /^Player [\w-]+$/.test(input.value))) {
+                        input.value = displayNameForPeer(networkPlayers[seat]);
+                    }
+                }
+                updateTurnIndicator();
+                updateTournamentMatchDisplay();
             }
         }
 
@@ -5441,6 +6358,7 @@
                 addr: myAddr,
                 name: myName,
                 peerId: myPeerId,
+                gameId: focusedGameId || DEFAULT_GAME_ID,
                 state: {
                     board: board.map((row) => row.slice()),
                     currentPlayer,
@@ -5456,6 +6374,7 @@
                     notifications: notifications.map((entry) => ({ id: entry.id, at: entry.at, text: entry.text, kind: entry.kind, sender: entry.sender, senderPeerId: entry.senderPeerId })),
                     gameStartAnnounced,
                     gameOver,
+                    winnerPlayer: gameOver ? currentPlayer : null,
                     moveCount: countMoves(board),
                     lastMove: lastPlacedMove
                         ? { r: lastPlacedMove.r, c: lastPlacedMove.c, player: lastPlacedMove.player }
@@ -5471,7 +6390,8 @@
                         countdownDeadlineTs: tournamentState.countdownDeadlineTs,
                         deadlineTs: tournamentState.deadlineTs,
                         cycle: tournamentState.cycle,
-                        matchNumber: tournamentState.matchNumber
+                        matchNumber: tournamentState.matchNumber,
+                        roundIndex: tournamentState.roundIndex
                     }
                 }
             };
@@ -5725,6 +6645,12 @@
             tournamentState.matchNumber = 1;
             tournamentState.expiryNotified = false;
             tournamentState.countdownDeadlineTs = Date.now() + 10000;
+            if (tournamentState.roundAdvanceTimer) {
+                clearTimeout(tournamentState.roundAdvanceTimer);
+                tournamentState.roundAdvanceTimer = null;
+            }
+            tournamentState.rounds = [];
+            tournamentState.roundIndex = 0;
             if (tournamentState.countdownTimer) {
                 clearInterval(tournamentState.countdownTimer);
                 tournamentState.countdownTimer = null;
@@ -5798,7 +6724,7 @@
             updateModeSelectState();
         }
 
-        function beginTournamentMode({ fromRemote = false, pairIndex = 0, schedule = null, countdownDeadlineTs = null, deadlineTs = null, seatSeed = null, cycle = 0, matchNumber = 1, broadcast = true } = {}) {
+        function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0, schedule = null, countdownDeadlineTs = null, deadlineTs = null, seatSeed = null, cycle = 0, matchNumber = 1, broadcast = true } = {}) {
             const nextSchedule = Array.isArray(schedule) ? schedule : buildTournamentSchedule();
             const nextPairIndex = Number.isInteger(pairIndex) ? pairIndex : 0;
             const shouldPreserveTournamentClock = tournamentState.enabled && !tournamentState.finished
@@ -5849,8 +6775,27 @@
             scores[2] = 0;
             networkPlayers = { 1: null, 2: null };
             myAssignedPlayer = null;
+            // Concurrent rounds: derive disjoint pairings from the shared schedule and
+            // start the requested round (all matches in the round run simultaneously).
+            tournamentState.departed = new Set();
+            tournamentState.rounds = buildTournamentRounds(tournamentPeersFromSchedule(nextSchedule));
+            if (tournamentState.roundAdvanceTimer) {
+                clearTimeout(tournamentState.roundAdvanceTimer);
+                tournamentState.roundAdvanceTimer = null;
+            }
+            tournamentState.roundIndex = Number.isInteger(roundIndex) ? roundIndex : 0;
+            // Discard records from any previous tournament so gameIds don't collide visually.
+            for (const [gid, rec] of games) {
+                if (rec.mode === 'webxdc-tournament') games.delete(gid);
+            }
+            if (!games.has(DEFAULT_GAME_ID)) createGameRecord(DEFAULT_GAME_ID, { mode: 'webxdc-tournament' });
+            focusedGameId = DEFAULT_GAME_ID;
             initBoard(false);
-            updateTournamentMatchState(tournamentState.pairIndex);
+            if (tournamentState.rounds.length) {
+                startTournamentRound(tournamentState.roundIndex);
+            } else {
+                updateTournamentMatchState(tournamentState.pairIndex);
+            }
 
             // Safety net: if a network player was evicted by stale-detection before this
             // tournament reset, their connectedPlayers entry was deleted. The exit monitor
@@ -5875,6 +6820,7 @@
                     action: 'TOURNAMENT_MODE',
                     mode: 'webxdc-tournament',
                     pairIndex: tournamentState.pairIndex,
+                    roundIndex: tournamentState.roundIndex,
                     countdownDeadlineTs: tournamentState.countdownDeadlineTs,
                     deadlineTs: tournamentState.deadlineTs,
                     seatSeed: tournamentState.seatSeed,
@@ -6014,7 +6960,13 @@
                 }
                 maybeAnnounceGameStart('webxdc-start');
             }
-            if (gameModeSelect.value === 'webxdc-tournament') {
+            if (gameModeSelect.value === 'webxdc-tournament' && tournamentRoundsActive()) {
+                // Round-based concurrent play: seats come from the round scheduler, not pairIndex.
+                tournamentState.enabled = true;
+                syncMyAssignedPlayer();
+                gameStartAnnounced = false;
+                rememberConnectedPlayer(myPeerId, myName, myAddr);
+            } else if (gameModeSelect.value === 'webxdc-tournament') {
                 tournamentState.enabled = true;
                 // Never rebuild the schedule mid-tournament; dynamic deduplication can shrink it
                 // and break pairIndex, seat assignment, and timers. Only build if not yet set.
@@ -6089,6 +7041,7 @@
                     {
                         action: 'RESET',
                         tournamentReset: gameModeSelect.value === 'webxdc-tournament',
+                        gameId: focusedGameId || DEFAULT_GAME_ID,
                         seatSeed: gameModeSelect.value === 'webxdc-tournament'
                             ? tournamentState.seatSeed
                             : gameModeSelect.value === 'webxdc'
@@ -6140,6 +7093,20 @@
             }
 
             if (gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament') {
+                // Challenge model: in 2-player mode you can only move in a game you were
+                // seated into via a challenge. The idle default board and spectated games
+                // are read-only.
+                if (gameModeSelect.value === 'webxdc') {
+                    const iHaveSeat = peerRepresentsLocalPlayer(networkPlayers[1]) || peerRepresentsLocalPlayer(networkPlayers[2]);
+                    if (!iHaveSeat) {
+                        if (isSpectatingFocusedGame()) {
+                            showToast('You are spectating this game.', { variant: 'info', duration: 2500 });
+                        } else {
+                            showToast('Challenge a peer in "Connected Peers" to start a game.', { variant: 'info', duration: 3500 });
+                        }
+                        return;
+                    }
+                }
                 // If another device with my same addr has already claimed a tournament slot, I'm a spectator.
                 const myAddrNorm = normalizeAddr(myAddr);
                 if (myAddrNorm && gameModeSelect.value === 'webxdc-tournament' && tournamentPlayerAddrLock.size > 0) {
@@ -6260,7 +7227,7 @@
                 // Broadcast it silently to the chat network
                 if (window.webxdc) {
                     sendXdcUpdate(
-                        { action: 'MOVE', r: r, c: c, player: playedAs, addr: myAddr, name: myName, peerId: myPeerId },
+                        { action: 'MOVE', r: r, c: c, player: playedAs, addr: myAddr, name: myName, peerId: myPeerId, gameId: focusedGameId || DEFAULT_GAME_ID },
                         `${myName} placed a piece.`,
                         `Gomoku: ${myName} made a move!`
                     );
@@ -6326,6 +7293,7 @@
 
                 maybeStartComputerTurn();
             }
+            updateGamesInProgressPanel();
         }
 
         // --- AI Logic ---
@@ -7329,6 +8297,12 @@
         updateDifficultyControlVisibility();
         boardZoom.init();
         initBoard(false);
+        if (!focusedGameId) {
+            focusedGameId = DEFAULT_GAME_ID;
+            createGameRecord(DEFAULT_GAME_ID, { mode: gameModeSelect.value });
+            snapshotFocusedGame();
+        }
+        updateGamesInProgressPanel();
     </script>
 </body>
 </html>

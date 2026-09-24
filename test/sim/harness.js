@@ -4,6 +4,21 @@
 const fs = require('fs');
 const path = require('path');
 const { JSDOM } = require('jsdom');
+const { afterEach } = require('node:test');
+
+// Every jsdom window created by makePeer. game.js starts setIntervals (presence
+// heartbeat, tournament clock, move timer…) that would otherwise keep the Node
+// event loop alive after the last test finishes; window.close() clears them.
+const livePeers = new Set();
+function closeAll() {
+    for (const peer of livePeers) {
+        peer.closed = true;
+        peer.listener = null;
+        try { peer.window.close(); } catch { /* already closed */ }
+    }
+    livePeers.clear();
+}
+afterEach(closeAll);
 
 const rawHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
 const gameScript = fs.readFileSync(path.join(__dirname, '..', '..', 'js', 'game.js'), 'utf8');
@@ -40,7 +55,7 @@ class Network {
 }
 
 function makePeer(net, addr, name) {
-    const peer = { addr, name, listener: null, errors: [], alerts: [] };
+    const peer = { addr, name, listener: null, errors: [], alerts: [], closed: false };
     const dom = new JSDOM(html, {
         runScripts: 'dangerously',
         pretendToBeVisual: true,
@@ -57,7 +72,10 @@ function makePeer(net, addr, name) {
                 }
             };
             window.alert = (m) => { peer.alerts.push(String(m)); };
-            window.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+            // Use the window's own timer so window.close() cancels pending frames; game.js
+            // polls rAF forever in some paths (e.g. boardZoom.reset while layout is 0×0).
+            window.requestAnimationFrame = (cb) => (peer.closed ? 0 : window.setTimeout(() => cb(Date.now()), 16));
+            window.cancelAnimationFrame = (id) => window.clearTimeout(id);
             window.HTMLCanvasElement.prototype.getContext = () => new Proxy({}, { get: () => () => {} });
             window.AudioContext = undefined;
             window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
@@ -66,6 +84,7 @@ function makePeer(net, addr, name) {
     peer.window = dom.window;
     peer.doc = dom.window.document;
     net.add(peer);
+    livePeers.add(peer);
     // Inject as a real script element so top-level let/const become global
     // lexical bindings visible to later window.eval() calls.
     const script = dom.window.document.createElement('script');
@@ -89,4 +108,4 @@ function setMode(peer, mode) {
 function panelText(peer) { return $(peer, '#games-in-progress-list').textContent.trim(); }
 function toasts(peer) { return $$(peer, '#toast-stack .toast').map((t) => t.textContent); }
 
-module.exports = { Network, makePeer, $, $$, ev, clickCell, setMode, panelText, toasts };
+module.exports = { Network, makePeer, closeAll, $, $$, ev, clickCell, setMode, panelText, toasts };

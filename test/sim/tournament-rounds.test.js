@@ -174,3 +174,32 @@ test('tournament: a leaver forfeits its current match and later rounds walk over
     }
     assertNoErrors(stayers);
 });
+
+test('tournament: heartbeat after a hidden-tab LEAVE must not re-seat the leaver', async () => {
+    const { peers, byId } = boot(['Alice', 'Bob']);
+    H.setMode(peers[0], 'webxdc-tournament');
+    skipCountdown(peers);
+
+    const rec = JSON.parse(H.ev(peers[0], 'JSON.stringify(currentRoundRecords()[0])'));
+    const leaver = byId[rec.players[1]];
+    const stayer = byId[rec.players[2]];
+    const leaverId = H.ev(leaver, 'myPeerId');
+
+    H.clickCell(leaver, 7, 7);
+    // Simulate a backgrounded tab whose LEAVE check and heartbeat fire back-to-back on wake.
+    Object.defineProperty(leaver.doc, 'visibilityState', { value: 'hidden', configurable: true });
+    H.ev(leaver, "broadcastLocalLeave('visibility-hidden-timeout')");
+    H.ev(leaver, "announcePresence('PRESENCE')");
+
+    assert.equal(H.ev(stayer, `connectedPlayers[${JSON.stringify(leaverId)}] === undefined`), true, 'leaver not resurrected by post-leave heartbeat');
+    assert.ok(H.ev(stayer, `knownLeftPeers.has(${JSON.stringify(leaverId)})`), 'leaver still marked as left');
+    assert.ok(H.ev(stayer, 'currentRoundRecords().every((r) => r.gameOver)'), 'match awarded to the remaining player');
+
+    // Only one live participant remains: the scheduler must finalize instead of
+    // cycling walkover rounds against the departed peer forever.
+    await sleep(5500);
+    assert.equal(H.ev(stayer, 'tournamentState.finished'), true, 'tournament finalized');
+    assert.equal(H.ev(stayer, 'tournamentState.cycle'), 0, 'no new round-robin cycle was started');
+    assert.match(H.$(stayer, '#turn-indicator').textContent, /Tournament Final/);
+    assertNoErrors([stayer]);
+});

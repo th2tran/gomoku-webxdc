@@ -553,6 +553,18 @@
             return round.map((pair) => games.get(tournamentMatchGameId(tournamentState.roundIndex, pair))).filter(Boolean);
         }
 
+        // Participants in the round schedule who have not left the tournament.
+        function tournamentLiveRoundPeerCount() {
+            const departed = tournamentState.departed instanceof Set ? tournamentState.departed : new Set();
+            const live = new Set();
+            for (const round of (tournamentState.rounds || [])) {
+                for (const pair of round) {
+                    for (const peerId of pair) if (peerId && !departed.has(peerId)) live.add(peerId);
+                }
+            }
+            return live.size;
+        }
+
         function startTournamentRound(roundIndex, { announce = true } = {}) {
             if (!Array.isArray(tournamentState.rounds) || !tournamentState.rounds.length) return;
             const idx = ((roundIndex % tournamentState.rounds.length) + tournamentState.rounds.length) % tournamentState.rounds.length;
@@ -638,7 +650,12 @@
             if (!round.length || recs.length < round.length) return;
             if (!recs.every((r) => r.gameOver)) return;
 
-            if (isTournamentClockExpired(Date.now())) {
+            // Nobody left to play: with fewer than two live participants every further
+            // round would just be walkovers against departed peers, so finish now.
+            if (isTournamentClockExpired(Date.now()) || tournamentLiveRoundPeerCount() < 2) {
+                if (tournamentLiveRoundPeerCount() < 2) {
+                    debugLog('TOURNAMENT_NO_OPPONENTS_LEFT', { livePeers: tournamentLiveRoundPeerCount(), departed: Array.from(tournamentState.departed || []) });
+                }
                 tournamentState.roundAdvanceTimer = setTimeout(() => finalizeTournament(), 5000);
                 return;
             }
@@ -647,7 +664,7 @@
             tournamentState.roundAdvanceTimer = setTimeout(() => {
                 tournamentState.roundAdvanceTimer = null;
                 if (gameModeSelect.value !== 'webxdc-tournament' || tournamentState.finished) return;
-                if (isTournamentClockExpired(Date.now())) { finalizeTournament(); return; }
+                if (isTournamentClockExpired(Date.now()) || tournamentLiveRoundPeerCount() < 2) { finalizeTournament(); return; }
                 if (completedCycle) {
                     tournamentState.cycle = (tournamentState.cycle || 0) + 1;
                     stopFireworks();
@@ -4500,6 +4517,15 @@
         // player sends back to a newcomer, so discovery works in both directions.
         function announcePresence(action = 'JOIN') {
             if (!window.webxdc) return;
+            // Once we've told peers we left (hidden-tab timeout / pagehide), the periodic
+            // heartbeat must stay quiet until the page is visible again. A throttled
+            // background tab fires the LEAVE check and the heartbeat back-to-back on wake;
+            // a PRESENCE right after LEAVE reads as a live rejoin and gets the departed
+            // player re-seated into the tournament.
+            if (action === 'PRESENCE' && localLeaveBroadcastSent && document.visibilityState !== 'visible') {
+                debugLog('PRESENCE_SUPPRESSED_AFTER_LEAVE', { visibilityState: document.visibilityState });
+                return;
+            }
 
             lastPresenceSentAt = Date.now();
             rememberConnectedPlayer(myPeerId, myName, myAddr);

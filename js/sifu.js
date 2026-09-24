@@ -602,6 +602,251 @@ function runThreatSpaceSearch(board, attacker, defender, depth = 3) {
     return null;
 }
 
+// ---------------------------------------------------------------------------
+// Forced-win search ("victory by continuous threats").
+//
+// The layered heuristics above answer one threat at a time. That is exactly
+// how the reported loss (gomoku-webxdc:0.8.244) happened: at move 12 White
+// dutifully blocked a *potential* open three with `he`, after which Black
+// won by force — `if` (open three, forced block), `ff` (broken three, forced
+// block) and then `gg` landed a double open three that no single stone could
+// answer. Every individual reply was "correct" locally; the position was lost
+// three moves earlier.
+//
+// This search plays out the attacker's continuous threats: each attacker move
+// must create a four or a live (open or broken) three, and the defender is
+// limited to the squares that actually neutralise that threat plus any
+// counter-four. A five, an open four, a double four, or a live three the
+// defender cannot break in one stone are all terminal wins. It is bounded by
+// depth (attacker moves) and a node budget so it stays cheap enough to run
+// several times per turn inside the worker; when the budget runs out it
+// conservatively reports "no forced win".
+// ---------------------------------------------------------------------------
+const FORCED_WIN_NODE_BUDGET = 2500;
+
+function collectAttackerThreatSquares(board, attacker) {
+    const seen = new Set();
+    const squares = [];
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            if (board[r][c] !== attacker) continue;
+            for (const [dr, dc] of DIRECTIONS) {
+                for (const step of [-1, 1]) {
+                    for (let k = 1; k <= 2; k++) {
+                        const rr = r + dr * step * k;
+                        const cc = c + dc * step * k;
+                        if (!inBounds(rr, cc)) break;
+                        const value = board[rr][cc];
+                        if (value !== EMPTY) {
+                            if (value !== attacker) break;
+                            continue;
+                        }
+                        const key = rr * SIZE + cc;
+                        if (!seen.has(key)) {
+                            seen.add(key);
+                            squares.push({ r: rr, c: cc });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return squares;
+}
+
+// Every empty square whose occupation would break at least one of the
+// opponent's live threes (open or broken). Unsorted and cheap, unlike
+// `findExistingOpenThreeBlockingMoves`, which also ranks its result.
+function collectLiveThreeBlockSquares(board, defender) {
+    const opponent = defender === BLACK ? WHITE : BLACK;
+    const patterns = [
+        [EMPTY, opponent, opponent, opponent, EMPTY],
+        [EMPTY, EMPTY, opponent, opponent, opponent, EMPTY],
+        [EMPTY, opponent, opponent, opponent, EMPTY, EMPTY],
+        [EMPTY, opponent, opponent, EMPTY, opponent, EMPTY],
+        [EMPTY, opponent, EMPTY, opponent, opponent, EMPTY]
+    ];
+    const seen = new Set();
+    const squares = [];
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            for (const [dr, dc] of DIRECTIONS) {
+                for (const pattern of patterns) {
+                    let matches = true;
+                    for (let i = 0; i < pattern.length; i++) {
+                        const rr = r + dr * i;
+                        const cc = c + dc * i;
+                        if (!inBounds(rr, cc) || board[rr][cc] !== pattern[i]) {
+                            matches = false;
+                            break;
+                        }
+                    }
+                    if (!matches) continue;
+                    for (let i = 0; i < pattern.length; i++) {
+                        if (pattern[i] !== EMPTY) continue;
+                        const rr = r + dr * i;
+                        const cc = c + dc * i;
+                        const key = rr * SIZE + cc;
+                        if (!seen.has(key)) {
+                            seen.add(key);
+                            squares.push({ r: rr, c: cc });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return squares;
+}
+
+function findForcedWinSequence(board, attacker, defender, depth = 4, budget = { nodes: FORCED_WIN_NODE_BUDGET }) {
+    if (depth <= 0 || budget.nodes <= 0) return null;
+
+    const five = findImmediateWin(board, attacker);
+    if (five) return { move: five, type: 'five' };
+
+    // If the defender already owns a live three, only a four keeps the
+    // initiative: any slower threat lets them push to an open four first.
+    const defenderHasLiveThree = countExistingLiveThreeLines(board, defender) > 0;
+    const baselineThrees = countExistingLiveThreeLines(board, attacker);
+
+    const candidates = [];
+    for (const square of collectAttackerThreatSquares(board, attacker)) {
+        const threat = classifyThreatAtMove(board, square.r, square.c, attacker);
+        if (threat.severity < 2) continue;
+        if (defenderHasLiveThree && threat.severity < 4) continue;
+        candidates.push({ ...square, threat });
+    }
+    candidates.sort((a, b) => b.threat.severity - a.threat.severity);
+
+    for (const candidate of candidates) {
+        if (budget.nodes-- <= 0) return null;
+        const { r, c, threat } = candidate;
+        board[r][c] = attacker;
+        const result = { move: { r, c }, type: threat.type };
+
+        if (threat.type === 'five' || threat.type === 'open-four') {
+            board[r][c] = EMPTY;
+            return result;
+        }
+
+        const attackerWins = enumerateImmediateWinningMoves(board, attacker);
+        let replies;
+        if (attackerWins.length >= 2) {
+            board[r][c] = EMPTY;
+            return { ...result, type: 'double-four' };
+        }
+        if (attackerWins.length === 1) {
+            replies = [attackerWins[0]];
+        } else {
+            const newThrees = countExistingLiveThreeLines(board, attacker) - baselineThrees;
+            if (newThrees <= 0) {
+                board[r][c] = EMPTY;
+                continue;
+            }
+            replies = collectLiveThreeBlockSquares(board, defender);
+            if (!replies.length) {
+                board[r][c] = EMPTY;
+                continue;
+            }
+            // A double live three is already decisive when no single stone breaks
+            // every three and the defender has no counter-four to buy time.
+            if (newThrees >= 2) {
+                const hasCounterFour = collectAttackerThreatSquares(board, defender)
+                    .some((square) => classifyThreatAtMove(board, square.r, square.c, defender).severity >= 4);
+                if (!hasCounterFour) {
+                    const unbreakable = replies.every((reply) => {
+                        board[reply.r][reply.c] = defender;
+                        const remaining = countExistingLiveThreeLines(board, attacker);
+                        board[reply.r][reply.c] = EMPTY;
+                        return remaining >= 1;
+                    });
+                    if (unbreakable) {
+                        board[r][c] = EMPTY;
+                        return { ...result, type: 'double-three' };
+                    }
+                }
+            }
+        }
+        for (const square of collectAttackerThreatSquares(board, defender)) {
+            if (classifyThreatAtMove(board, square.r, square.c, defender).severity >= 4) replies.push(square);
+        }
+        replies = uniqueMoves(replies);
+
+        let refuted = false;
+        for (const reply of replies) {
+            board[reply.r][reply.c] = defender;
+            if (isWinAfterMove(board, reply.r, reply.c, defender)) {
+                refuted = true;
+            } else {
+                const defenderWin = findImmediateWin(board, defender);
+                if (defenderWin) {
+                    // The reply made a four: the attacker must answer it first.
+                    board[defenderWin.r][defenderWin.c] = attacker;
+                    if (!isWinAfterMove(board, defenderWin.r, defenderWin.c, attacker)) {
+                        if (findImmediateWin(board, defender)
+                            || !findForcedWinSequence(board, attacker, defender, depth - 1, budget)) {
+                            refuted = true;
+                        }
+                    }
+                    board[defenderWin.r][defenderWin.c] = EMPTY;
+                } else if (!findForcedWinSequence(board, attacker, defender, depth - 1, budget)) {
+                    refuted = true;
+                }
+            }
+            board[reply.r][reply.c] = EMPTY;
+            if (refuted) break;
+        }
+
+        board[r][c] = EMPTY;
+        if (!refuted) return result;
+    }
+
+    return null;
+}
+
+// Does playing (r, c) leave the opponent without a forced win?
+function moveAvoidsForcedLoss(board, r, c, player, opponent, depth, budget = { nodes: FORCED_WIN_NODE_BUDGET }) {
+    if (board[r]?.[c] !== EMPTY) return false;
+    board[r][c] = player;
+    const forcedLoss = findForcedWinSequence(board, opponent, player, depth, budget);
+    board[r][c] = EMPTY;
+    return !forcedLoss;
+}
+
+// From an ordered list of candidate defences, return the first one that does
+// not hand the opponent a forced win, or null if they all do. The node budget
+// is shared across candidates so the whole scan stays bounded.
+function pickSafeDefense(board, player, opponent, candidates, depth, limit = 12, budget = { nodes: FORCED_WIN_NODE_BUDGET * 4 }) {
+    for (const move of uniqueMoves(candidates).slice(0, limit)) {
+        if (budget.nodes <= 0) return null;
+        if (moveAvoidsForcedLoss(board, move.r, move.c, player, opponent, depth, budget)) {
+            return { r: move.r, c: move.c };
+        }
+    }
+    return null;
+}
+
+// The opponent has a forced win if we play a quiet move. Look for a stone that
+// breaks the sequence: occupying its first square, blocking the shapes it uses,
+// or seizing the initiative with a threat of our own.
+function findForcedLossDefense(board, player, opponent, depth) {
+    const forcedWin = findForcedWinSequence(board, opponent, player, depth, { nodes: FORCED_WIN_NODE_BUDGET });
+    if (!forcedWin) return null;
+
+    const candidates = [forcedWin.move];
+    for (const move of findThreatBlockingMoves(board, player, ['open-three', 'broken-three', 'simple-four', 'open-four'])) {
+        candidates.push({ r: move.r, c: move.c });
+    }
+    for (const move of enumerateForcingMoves(board, player, 12)) {
+        candidates.push({ r: move.r, c: move.c });
+    }
+    for (const move of getThreatSpaceCandidateMoves(board, player, 12)) {
+        candidates.push({ r: move.r, c: move.c });
+    }
+    return pickSafeDefense(board, player, opponent, candidates, depth, 16);
+}
+
 function createsDoubleThreat(board, r, c, player) {
     if (board[r]?.[c] !== EMPTY) return false;
     const test = cloneBoard(board);
@@ -926,14 +1171,18 @@ function chooseMove(board, payload) {
     const forcedBlock = findImmediateBlock(boardCopy, aiPlayer);
     if (forcedBlock) return forcedBlock;
 
+    const forcedWinDepth = 4;
+
     // An existing open three / four is an immediate forcing threat: if left
     // unanswered the opponent converts it into an (open) four and wins. Block it
     // before anything speculative. `findExistingOpenThreeBlockingMoves` only
     // reacts to shapes already on the board, so it will not fire on a merely
-    // potential fork.
+    // potential fork. When several squares break the threat, prefer one after
+    // which the opponent has no forced continuation.
     const existingOpenThreeBlocks = findExistingOpenThreeBlockingMoves(boardCopy, aiPlayer);
     if (existingOpenThreeBlocks.length) {
-        return { r: existingOpenThreeBlocks[0].r, c: existingOpenThreeBlocks[0].c };
+        const safeBlock = pickSafeDefense(boardCopy, aiPlayer, humanPlayer, existingOpenThreeBlocks, forcedWinDepth);
+        return safeBlock || { r: existingOpenThreeBlocks[0].r, c: existingOpenThreeBlocks[0].c };
     }
 
     // No four/open-four is on the board yet, but the opponent may have a single
@@ -947,6 +1196,21 @@ function chooseMove(board, payload) {
     // defeat, not merely a positional disadvantage.
     const fourThreeForkDefense = findFourThreeForkDefense(boardCopy, aiPlayer);
     if (fourThreeForkDefense) return fourThreeForkDefense;
+
+    // Seize the initiative when we have a forced win of our own: continuous
+    // threats leave the opponent no tempo to execute theirs.
+    if (payload.isHard) {
+        const myForcedWin = findForcedWinSequence(boardCopy, aiPlayer, humanPlayer, forcedWinDepth, { nodes: FORCED_WIN_NODE_BUDGET });
+        if (myForcedWin) return myForcedWin.move;
+    }
+
+    // Nothing on the board is forcing yet, but the opponent may already have a
+    // winning sequence of continuous threats (the reported loss: after White's
+    // quiet block at move 12, Black forced `if`, `ff`, then the `gg` double
+    // three). The greedy potential-three blocks below cannot see that; look for
+    // a stone that actually breaks the sequence before falling back to them.
+    const forcedLossDefense = findForcedLossDefense(boardCopy, aiPlayer, humanPlayer, forcedWinDepth);
+    if (forcedLossDefense) return forcedLossDefense;
 
     const urgentLiveThreeBlock = findUrgentLiveThreeBlock(boardCopy, aiPlayer);
     if (urgentLiveThreeBlock) return urgentLiveThreeBlock;
@@ -1113,6 +1377,9 @@ if (typeof module !== 'undefined' && module.exports) {
         findOpenThreeBlockingMoves,
         findPreemptiveForkDefense,
         countExistingLiveThreeLines,
+        findForcedWinSequence,
+        findForcedLossDefense,
+        moveAvoidsForcedLoss,
         chooseMove,
         handleMessage
     };

@@ -733,6 +733,24 @@
         const moveListEl = document.getElementById('move-list');
         const moveListEmptyEl = document.getElementById('move-list-empty');
         const currentMatchMetaEl = document.getElementById('current-match-meta');
+        const connectedPeersHelpBtn = document.getElementById('connected-peers-help-btn');
+        const connectedPeersHelpTip = document.getElementById('connected-peers-help-tip');
+        if (connectedPeersHelpBtn && connectedPeersHelpTip) {
+            const setHelpTipOpen = (open) => {
+                connectedPeersHelpTip.hidden = !open;
+                connectedPeersHelpBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            };
+            connectedPeersHelpBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                setHelpTipOpen(connectedPeersHelpTip.hidden);
+            });
+            document.addEventListener('click', (e) => {
+                if (!connectedPeersHelpTip.hidden && !connectedPeersHelpTip.contains(e.target)) setHelpTipOpen(false);
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') setHelpTipOpen(false);
+            });
+        }
         window.addEventListener('resize', positionBoardCells);
 
         // Keep the board square while never exceeding the vertical space actually
@@ -1326,7 +1344,7 @@
 
             moves.forEach((move) => {
                 if (importedBoard[move.r][move.c] !== 0) {
-                    throw new Error(`SGF contains duplicate move at ${move.r + 1}, ${move.c + 1}.`);
+                    throw new Error(`SGF contains duplicate move at ${boardAxisLabel(move.r)}, ${boardAxisLabel(move.c)}.`);
                 }
                 importedBoard[move.r][move.c] = move.player;
                 if (checkWinOnBoardState(importedBoard, move.r, move.c, move.player)) {
@@ -1621,7 +1639,7 @@
                 item.className = 'move-list-item';
                 item.dataset.index = String(index);
                 const playerLabel = move.player === 1 ? 'B' : 'W';
-                item.innerHTML = `<span>${index + 1}. ${playerLabel}</span><span>(${move.r + 1}, ${move.c + 1})</span>`;
+                item.innerHTML = `<span>${index + 1}. ${playerLabel}</span><span>[${boardAxisLabel(move.r)}${boardAxisLabel(move.c)}]</span>`;
                 item.addEventListener('click', () => {
                     if (!historyReplayState) return;
                     if (historyReplayTimer) {
@@ -1955,6 +1973,22 @@
             return gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament';
         }
 
+        let notificationsTabBlinkTimer = null;
+        // Restart the two-flash animation on the chat tab. Removing the class and forcing a
+        // reflow is required so back-to-back messages replay it instead of being ignored as
+        // an already-running animation.
+        function blinkNotificationsTab() {
+            if (!notificationsTabBtn) return;
+            notificationsTabBtn.classList.remove('blinking');
+            void notificationsTabBtn.offsetWidth;
+            notificationsTabBtn.classList.add('blinking');
+            if (notificationsTabBlinkTimer) clearTimeout(notificationsTabBlinkTimer);
+            notificationsTabBlinkTimer = setTimeout(() => {
+                notificationsTabBlinkTimer = null;
+                notificationsTabBtn.classList.remove('blinking');
+            }, 900);
+        }
+
         function addNotification(text, options = {}) {
             if (typeof text !== 'string' || !text.trim()) return;
             const noteText = text.trim();
@@ -1980,6 +2014,12 @@
                 if (removed?.id) notificationIds.delete(removed.id);
             }
             renderNotifications();
+
+            // Draw attention to a chat message that arrived from someone else — the tab
+            // may be the only visible affordance when the chat panel is minimized.
+            if (noteKind === 'chat' && !peerRepresentsLocalPlayer(noteSenderPeerId)) {
+                blinkNotificationsTab();
+            }
 
             if (options.broadcast && window.webxdc && isWebxdcNetworkMode()) {
                 sendXdcUpdate({
@@ -4599,6 +4639,18 @@
             return { inset, usableSize, step };
         }
 
+        // Board axes are labelled with letters (a, b, c … o for the default 15x15).
+        // Beyond 26 lines the labels continue as aa, ab, … so larger boards stay legible.
+        function boardAxisLabel(index) {
+            let label = '';
+            let n = index;
+            do {
+                label = String.fromCharCode(97 + (n % 26)) + label;
+                n = Math.floor(n / 26) - 1;
+            } while (n >= 0);
+            return label;
+        }
+
         function renderBoardNumbering() {
             if (!boardElement) return;
             const { inset, step } = getBoardLayoutMetrics();
@@ -4606,10 +4658,11 @@
             existing.forEach((node) => node.remove());
 
             for (let i = 0; i < boardSize; i++) {
+                const text = boardAxisLabel(i);
                 if (i > 0) {
                     const rowLabel = document.createElement('div');
                     rowLabel.className = 'board-axis-label';
-                    rowLabel.textContent = String(i + 1);
+                    rowLabel.textContent = text;
                     rowLabel.style.left = `${Math.max(4, inset * 0.35)}px`;
                     rowLabel.style.top = `${inset + (i * step) - 7}px`;
                     boardElement.appendChild(rowLabel);
@@ -4617,7 +4670,7 @@
 
                 const colLabel = document.createElement('div');
                 colLabel.className = 'board-axis-label';
-                colLabel.textContent = String(i + 1);
+                colLabel.textContent = text;
                 colLabel.style.left = `${inset + (i * step) - 6}px`;
                 colLabel.style.top = `${Math.max(4, inset * 0.35)}px`;
                 boardElement.appendChild(colLabel);

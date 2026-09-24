@@ -4409,7 +4409,7 @@
         function shouldRunMoveTimer() {
             if (gameOver || !Array.isArray(board) || board.length !== boardSize) return false;
             if (gameModeSelect.value === 'pvp') return false;
-            if (gameModeSelect.value === 'pve') return true;
+            if (gameModeSelect.value === 'pve') return false;
             if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return true;
 
             const localPlayerNumber = getLocalAssignedPlayerNumber();
@@ -4450,14 +4450,8 @@
             }
 
             if (gameModeSelect.value === 'pve') {
-                const displayPlayer = currentPlayer;
-                const remainingBase = Number.isFinite(playerRemainingMs[displayPlayer]) ? playerRemainingMs[displayPlayer] : moveTimeLimitMs;
-                const elapsedMs = Number.isFinite(playerTurnStartedAt[displayPlayer]) && displayPlayer === currentPlayer
-                    ? Math.max(0, Date.now() - playerTurnStartedAt[displayPlayer])
-                    : 0;
-                const remainingMs = Math.max(0, remainingBase - elapsedMs);
-                moveTimerEl.textContent = `Move Timer: ${formatClockDuration(remainingMs)}${tournamentText}`;
-                moveTimerEl.style.color = remainingMs <= 10000 ? '#ff7675' : remainingMs <= 30000 ? '#f6c90e' : '#c8d6e5';
+                moveTimerEl.textContent = 'Move Timer: --';
+                moveTimerEl.style.color = '#c8d6e5';
                 return;
             }
 

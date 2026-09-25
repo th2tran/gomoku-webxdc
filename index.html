@@ -54,7 +54,14 @@
         }
 
         body.notifications-open .app-layout {
-            padding-right: 420px;
+            /* .app-layout is centered with a max-width, so it only actually overlaps
+               the fixed, right-docked chat panel on narrower viewports; on very wide
+               screens there's already clear space between them. JS measures the real
+               overlap (--chat-overlap-px) on resize/open/close so exactly the space
+               that's needed is reserved — never more — on any screen size or shape.
+               The static fallback matches the panel width for browsers/timing where
+               JS hasn't run yet. */
+            padding-right: var(--chat-overlap-px, 420px);
         }
 
         .left-rail,

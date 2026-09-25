@@ -752,6 +752,7 @@
             });
         }
         window.addEventListener('resize', positionBoardCells);
+        window.addEventListener('resize', updateChatOverlapPadding);
 
         // Keep the board square while never exceeding the vertical space actually
         // available in short/landscape viewports (e.g. 1280x640), where width alone
@@ -1049,11 +1050,36 @@
             debugPauseBtn.setAttribute('aria-label', debugLoggingPaused ? 'Resume debug logging' : 'Pause debug logging');
         }
 
+        const appLayoutEl = document.querySelector('.app-layout');
+
+        // .app-layout is centered with a max-width, so it only actually overlaps the
+        // fixed, right-docked chat panel on narrower viewports — on very wide screens
+        // there's already clear space between them. Rather than reserving a flat
+        // amount of space for the chat panel (which wastes room on wide screens) or a
+        // hand-tuned formula (which doesn't generalize), measure the real overlap
+        // between the two boxes and reserve exactly that much, so the board always
+        // gets all the space it actually can on any screen size or shape.
+        // .app-layout's own width/position doesn't depend on its own padding-right
+        // (box-sizing: border-box + width driven by its flex parent/max-width), so
+        // this measurement isn't circular with the padding it feeds into.
+        function updateChatOverlapPadding() {
+            if (!appLayoutEl) return;
+            if (!document.body.classList.contains('notifications-open') || !notificationsPopup) {
+                document.documentElement.style.setProperty('--chat-overlap-px', '0px');
+                return;
+            }
+            const layoutRight = appLayoutEl.getBoundingClientRect().right;
+            const panelLeft = notificationsPopup.getBoundingClientRect().left;
+            const overlap = Math.max(0, layoutRight - panelLeft);
+            document.documentElement.style.setProperty('--chat-overlap-px', `${Math.ceil(overlap)}px`);
+        }
+
         function updateSidePanelLayoutClass() {
             const anyPanelOpen = debugPopup.classList.contains('visible')
                 || (notificationsPopup.classList.contains('visible') && !notificationsPopup.classList.contains('minimized'));
             document.body.classList.toggle('debug-open', anyPanelOpen);
             document.body.classList.toggle('notifications-open', notificationsPopup && notificationsPopup.classList.contains('visible') && !notificationsPopup.classList.contains('minimized'));
+            updateChatOverlapPadding();
         }
 
         function updateNotificationsPanelState() {

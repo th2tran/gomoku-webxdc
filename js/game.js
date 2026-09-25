@@ -640,8 +640,22 @@
                     const mySeat = localSeatInRecord(rec);
                     const opp = displayNameForPeer(rec.players[mySeat === 1 ? 2 : 1]);
                     const youStart = rec.currentPlayer === mySeat;
-                    showToast(`Round ${idx + 1}: your match vs ${opp} is about to begin${youStart ? ' — you play first (Black).' : '.'}`, { variant: 'success', duration: 7000 });
-                    addNotification(`Round ${idx + 1} started: you play ${opp}.`, { id: `round-start:${target}:${myPeerId}`, at: Date.now(), broadcast: false });
+                    const cycleNote = (tournamentState.cycle || 0) > 0 ? ` (Round-robin #${tournamentState.cycle + 1})` : '';
+                    showToast(`Round ${idx + 1}${cycleNote}: your match vs ${opp} is about to begin${youStart ? ' — you play first (Black).' : '.'}`, { variant: 'success', duration: 7000 });
+                    // Name both seats by their fixed Black/White identity rather than "me
+                    // plays opponent" — this notification's text is included verbatim in
+                    // state.notifications and synced to every peer (see applyStatePayload),
+                    // so wording relative to "me"/"you" would read differently depending on
+                    // the reader, and each participant generating their own perspective-based
+                    // text (with a peerId-specific id) produced two near-duplicate entries
+                    // ("A plays B" and "B plays A") once synced to both sides. Using the same
+                    // deterministic id/text on both participants' clients lets addNotification's
+                    // id-based dedupe collapse them into a single shared entry. The round-robin
+                    // cycle is also included since roundIndex resets to 0 every cycle, so
+                    // "Round 1" alone was ambiguous after the first round-robin completed.
+                    const p1Name = displayNameForPeer(rec.players[1]) || rec.names[1] || 'Player 1';
+                    const p2Name = displayNameForPeer(rec.players[2]) || rec.names[2] || 'Player 2';
+                    addNotification(`Round ${idx + 1}${cycleNote} started: ${p1Name} (Black) vs ${p2Name} (White).`, { id: `round-start:${target}`, at: Date.now(), broadcast: false });
                 } else if (!myGameId && announce) {
                     showToast(`Round ${idx + 1}: you have a bye this round. Tap a game to spectate.`, { variant: 'info', duration: 6000 });
                 }
@@ -830,6 +844,9 @@
         const notificationsClearBtn = document.getElementById('notifications-clear-btn');
         const chatInput = document.getElementById('chat-input');
         const chatSendBtn = document.getElementById('chat-send-btn');
+        const howToPlayHelpBtn = document.getElementById('how-to-play-help-btn');
+        const howToPlayPopup = document.getElementById('how-to-play-popup');
+        const howToPlayCloseBtn = document.getElementById('how-to-play-close-btn');
         const sgfExportPopup = document.getElementById('sgf-export-popup');
         const sgfExportTextarea = document.getElementById('sgf-export-textarea');
         const sgfExportStatus = document.getElementById('sgf-export-status');
@@ -1258,6 +1275,20 @@
                 ...moveLines,
                 ')'
             ].join('\n');
+        }
+
+        function hideHowToPlayPopup() {
+            if (!howToPlayPopup) return;
+            howToPlayPopup.classList.remove('visible');
+            howToPlayPopup.setAttribute('aria-hidden', 'true');
+            if (howToPlayHelpBtn) howToPlayHelpBtn.setAttribute('aria-expanded', 'false');
+        }
+
+        function showHowToPlayPopup() {
+            if (!howToPlayPopup) return;
+            howToPlayPopup.classList.add('visible');
+            howToPlayPopup.setAttribute('aria-hidden', 'false');
+            if (howToPlayHelpBtn) howToPlayHelpBtn.setAttribute('aria-expanded', 'true');
         }
 
         function setSgfExportStatus(message) {
@@ -1897,6 +1928,20 @@
         if (historyBackupCloseBtn) historyBackupCloseBtn.addEventListener('click', hideHistoryBackupPopup);
         if (historyRestoreSubmitBtn) historyRestoreSubmitBtn.addEventListener('click', restoreHistoryFromBackup);
         if (historyRestoreCloseBtn) historyRestoreCloseBtn.addEventListener('click', hideHistoryRestorePopup);
+        if (howToPlayHelpBtn) {
+            howToPlayHelpBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                showHowToPlayPopup();
+            });
+        }
+        if (howToPlayCloseBtn) howToPlayCloseBtn.addEventListener('click', hideHowToPlayPopup);
+        if (howToPlayPopup) {
+            howToPlayPopup.addEventListener('click', (event) => {
+                if (event.target === howToPlayPopup) {
+                    hideHowToPlayPopup();
+                }
+            });
+        }
         if (sgfExportPopup) {
             sgfExportPopup.addEventListener('click', (event) => {
                 if (event.target === sgfExportPopup) {
@@ -1926,7 +1971,9 @@
             });
         }
         document.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape' && sgfExportPopup && sgfExportPopup.classList.contains('visible')) {
+            if (event.key === 'Escape' && howToPlayPopup && howToPlayPopup.classList.contains('visible')) {
+                hideHowToPlayPopup();
+            } else if (event.key === 'Escape' && sgfExportPopup && sgfExportPopup.classList.contains('visible')) {
                 hideSgfExportPopup();
             } else if (event.key === 'Escape' && sgfImportPopup && sgfImportPopup.classList.contains('visible')) {
                 hideSgfImportPopup();

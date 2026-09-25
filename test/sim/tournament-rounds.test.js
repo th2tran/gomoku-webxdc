@@ -40,6 +40,21 @@ function assertNoErrors(peers) {
     for (const p of peers) assert.deepEqual(p.errors.map((e) => e.message), [], `${p.name} errors`);
 }
 
+// Polls a condition across all peers until true or a timeout elapses. Needed
+// because tournament round-advance timers are real (not simulated) 5s
+// setTimeouts, so fixed sleeps are prone to flaking under CPU load / STATE
+// sync jitter across peers.
+async function waitUntil(peers, exprFn, { timeout = 20000, interval = 250 } = {}) {
+    const deadline = Date.now() + timeout;
+    for (;;) {
+        if (peers.every((p) => H.ev(p, exprFn))) return;
+        if (Date.now() >= deadline) {
+            throw new Error(`waitUntil timed out after ${timeout}ms waiting for: ${exprFn}`);
+        }
+        await sleep(interval);
+    }
+}
+
 test('tournament: disjoint concurrent rounds, byes, sync, and lockstep advance', async () => {
     const { peers, byId } = boot(['Alice', 'Bob', 'Carol', 'Dave', 'Erin']);
     H.setMode(peers[0], 'webxdc-tournament');
@@ -147,6 +162,59 @@ test('tournament: starting a new round resets both players\' move clocks to the 
     for (const p of peers) {
         assert.equal(H.ev(p, 'gameOver'), false, `${p.name}: match still in progress after the reset`);
         assert.doesNotMatch(H.$(p, '#turn-indicator').textContent, /ran out of time/, `${p.name}: still no premature timeout`);
+    }
+    assertNoErrors(peers);
+});
+
+// Regression test covering three related round-start notification bugs:
+// 1. The text used to read "you play {opponent}". Since notification text is
+//    included verbatim in state.notifications and synced to every peer via
+//    full STATE payloads (see applyStatePayload), a peer receiving another
+//    player's round-start note would see "you play X" in their own log —
+//    misleadingly implying it was about them.
+// 2. Each of the two match participants generated their own perspective-based
+//    note (their own peerId baked into the notification id), so once synced
+//    to both sides every match produced two near-duplicate log lines: "A
+//    plays B" and "B plays A" for the exact same round.
+// 3. The text only ever said "Round 1" (roundIndex resets to 0 every
+//    round-robin cycle) with no way to tell which round-robin cycle it was
+//    from, e.g. after "Round-robin completed. Starting round-robin #2..." the
+//    very next round-start note still just said "Round 1 started".
+test('tournament: round-start notification is a single deduped entry naming both players and the round-robin cycle', async () => {
+    // Use 4 peers (even count, no bye) so every peer is a participant of some
+    // match in every round — this keeps the test focused on the dedupe/cycle
+    // fixes without touching the separate pre-existing gap where a bye
+    // (spectating) peer only learns about another match's state via
+    // handleBackgroundGamePayload, which doesn't propagate notifications.
+    const { peers, byId } = boot(['Alice', 'Bob', 'Carol', 'Dave']);
+    H.setMode(peers[0], 'webxdc-tournament');
+    skipCountdown(peers);
+
+    playCurrentRound(peers, byId, 7);
+    await waitUntil(peers, "tournamentState.roundIndex === 1");
+
+    for (const p of peers) {
+        assert.equal(H.ev(p, 'tournamentState.roundIndex'), 1, `${p.name} advanced to round 2`);
+        const log = H.$(p, '#notifications-log').textContent;
+        assert.doesNotMatch(log, /you play/i, `${p.name}: log must not use "you play"`);
+        const round1StartMatches = log.match(/Round 1 started:/g) || [];
+        assert.equal(round1StartMatches.length, 1, `${p.name}: exactly one "Round 1 started" entry, not a duplicate per participant`);
+    }
+
+    // Force a full round-robin cycle to complete (4 peers → 3 rounds per
+    // cycle) so the next round-start note is for "Round 1" of round-robin
+    // #2 — it must be distinguishable from the very first "Round 1" note.
+    playCurrentRound(peers, byId, 3);
+    await waitUntil(peers, "tournamentState.roundIndex === 2");
+    playCurrentRound(peers, byId, 0);
+    await waitUntil(peers, "(tournamentState.cycle || 0) === 1", { timeout: 15000 });
+
+    for (const p of peers) {
+        assert.equal(H.ev(p, 'tournamentState.cycle'), 1, `${p.name}: round-robin #2 has started`);
+        const log = H.$(p, '#notifications-log').textContent;
+        assert.match(log, /Round 1 \(Round-robin #2\) started:/, `${p.name}: new cycle's round-start note is distinguishable from round-robin #1's`);
+        const round1CycleMatches = log.match(/Round 1 \(Round-robin #2\) started:/g) || [];
+        assert.equal(round1CycleMatches.length, 1, `${p.name}: still exactly one entry, not duplicated`);
     }
     assertNoErrors(peers);
 });

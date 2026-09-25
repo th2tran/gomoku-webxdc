@@ -107,7 +107,8 @@
             overflow: hidden;
         }
 
-        h1 { margin-top: 0; margin-bottom: 10px; font-size: 28px; }
+        h1 { margin-top: 0; margin-bottom: 10px; font-size: 28px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        h1 .panel-help-btn svg { width: 20px; height: 20px; }
 
         .dashboard {
             display: flex;
@@ -1105,6 +1106,64 @@
             color: #9eb4c8;
             font-size: 13px;
         }
+        .how-to-play-popup {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 255;
+            background: rgba(0, 0, 0, 0.58);
+            padding: 12px;
+            box-sizing: border-box;
+        }
+        .how-to-play-popup.visible {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .how-to-play-panel {
+            width: min(560px, 100%);
+            max-height: min(80vh, calc(100vh - 24px));
+            background: #1f2d3a;
+            border: 1px solid #4a6075;
+            border-radius: 10px;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .how-to-play-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 14px;
+            border-bottom: 1px solid #4a6075;
+            font-weight: 700;
+        }
+        .how-to-play-header button {
+            padding: 6px 10px;
+            font-size: 13px;
+            background: #52677d;
+        }
+        .how-to-play-body {
+            padding: 14px 18px;
+            overflow-y: auto;
+            color: #c8d6e5;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        .how-to-play-body h4 {
+            margin: 14px 0 4px;
+            color: #f1c40f;
+            font-size: 14px;
+        }
+        .how-to-play-body h4:first-child {
+            margin-top: 0;
+        }
+        .how-to-play-body ul {
+            margin: 4px 0;
+            padding-left: 20px;
+        }
         .sgf-import-popup {
             display: none;
             position: fixed;
@@ -1383,7 +1442,12 @@
 </head>
 <body>
 
-    <h1 id="title">Let's Gomoku!</h1>
+    <h1 id="title">
+        <span>Let's Gomoku!</span>
+        <span class="panel-help">
+            <button type="button" class="panel-help-btn" id="how-to-play-help-btn" aria-label="How to play" aria-expanded="false" aria-controls="how-to-play-popup"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M513.5-254.5Q528-269 528-290t-14.5-35.5Q499-340 478-340t-35.5 14.5Q428-311 428-290t14.5 35.5Q457-240 478-240t35.5-14.5ZM442-394h74q0-33 7.5-52t42.5-52q26-26 41-49.5t15-56.5q0-56-41-86t-97-30q-57 0-92.5 30T342-618l66 26q5-18 22.5-39t53.5-21q32 0 48 17.5t16 38.5q0 20-12 37.5T506-526q-44 39-54 59t-10 73Zm38 314q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z"/></svg></button>
+        </span>
+    </h1>
 
     <div class="app-layout">
         <div class="left-rail">
@@ -1520,6 +1584,37 @@
         </div>
     </div>
     <button class="notifications-tab" id="notifications-tab-btn" type="button" aria-label="Expand chat">◀</button>
+    <div class="how-to-play-popup" id="how-to-play-popup" aria-hidden="true">
+        <div class="how-to-play-panel" role="dialog" aria-modal="true" aria-labelledby="how-to-play-title">
+            <div class="how-to-play-header">
+                <span id="how-to-play-title">How to Play Gomoku</span>
+                <button id="how-to-play-close-btn" type="button">Close</button>
+            </div>
+            <div class="how-to-play-body">
+                <h4>Goal</h4>
+                <p>Be the first to get <strong>5 of your stones in a row</strong> — horizontally, vertically, or diagonally — on the 15×15 board.</p>
+                <h4>Playing</h4>
+                <ul>
+                    <li>Black moves first, then players alternate turns.</li>
+                    <li>Click an empty cell on the board to place your stone there. Stones cannot be moved or removed once placed.</li>
+                    <li>The game ends immediately once a player completes a line of 5 or more.</li>
+                </ul>
+                <h4>Modes</h4>
+                <ul>
+                    <li><strong>Network (2 players):</strong> Tap on a connected peer to challenge them to a live one-on-one match.</li>
+                    <li><strong>Network (Tournament):</strong> Everyone connected is auto-paired into round-robin tournament; win your matches to climb the standings.</li>
+                    <li><strong>Local Pass &amp; Play:</strong> Two players share one device, taking turns.</li>
+                    <li><strong>Local vs Computer:</strong> Play against the built-in computer opponent.</li>
+                </ul>
+                <h4>Other tips</h4>
+                <ul>
+                    <li>Each move has a time limit in network modes — running out of time forfeits the game.</li>
+                    <li>You can <strong>Resign</strong> at any time to concede your current game.</li>
+                    <li>Use <strong>Reset Board / Sync</strong> to start a fresh game or resync with your opponent.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
     <div class="sgf-export-popup" id="sgf-export-popup" aria-hidden="true">
         <div class="sgf-export-panel" role="dialog" aria-modal="true" aria-labelledby="sgf-export-title">
             <div class="sgf-export-header">

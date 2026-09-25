@@ -378,6 +378,10 @@
                 rec.gameOver = true;
                 rec.winnerPlayer = payload.winnerPlayer === 2 ? 2 : 1;
                 rec.updatedAt = Date.now();
+            } else if (payload.action === 'RESIGN') {
+                rec.gameOver = true;
+                rec.winnerPlayer = payload.winnerPlayer === 2 ? 2 : 1;
+                rec.updatedAt = Date.now();
             } else if (payload.action === 'WITHDRAWAL') {
                 rec.gameOver = true;
                 rec.updatedAt = Date.now();
@@ -794,6 +798,7 @@
         const difficultySelect = document.getElementById('difficulty-select');
         const titleEl = document.getElementById('title');
         const resetBtn = document.getElementById('reset-btn');
+        const resignBtn = document.getElementById('resign-btn');
         const debugPopup = document.getElementById('debug-popup');
         const debugPanel = document.getElementById('debug-panel');
         const debugPanelHeader = document.getElementById('debug-panel-header');
@@ -3166,6 +3171,127 @@
             }
         }
 
+        // ---- Resignation: a player concedes the current game without waiting on a
+        // timeout or move. Mirrors applyMoveTimeoutResult's shape/lifecycle but is
+        // triggered explicitly by the local player (or a remote RESIGN update) rather
+        // than an expired deadline.
+        function getResignSeatAssignment() {
+            if (gameOver || historyReplayState) return null;
+            const mode = gameModeSelect.value;
+            if (mode === 'pve') {
+                // Human always occupies the seat the computer doesn't.
+                const loserPlayer = pveComputerPlayer === 1 ? 2 : 1;
+                return { loserPlayer, winnerPlayer: pveComputerPlayer };
+            }
+            if (mode === 'pvp') {
+                // Same device passed between two local players — resign on behalf of
+                // whoever currently holds the device (i.e. is on the move).
+                const loserPlayer = currentPlayer;
+                return { loserPlayer, winnerPlayer: loserPlayer === 1 ? 2 : 1 };
+            }
+            if (mode === 'webxdc' || mode === 'webxdc-tournament') {
+                const loserPlayer = getLocalAssignedPlayerNumber();
+                if (loserPlayer === null) return null; // spectating: nothing to resign
+                const winnerPlayer = loserPlayer === 1 ? 2 : 1;
+                if (!networkPlayers[winnerPlayer]) return null; // no opponent seated yet
+                return {
+                    loserPlayer,
+                    winnerPlayer,
+                    loserPeerId: networkPlayers[loserPlayer],
+                    winnerPeerId: networkPlayers[winnerPlayer]
+                };
+            }
+            return null;
+        }
+
+        function updateResignButtonState() {
+            if (!resignBtn) return;
+            resignBtn.disabled = !getResignSeatAssignment();
+        }
+
+        function applyResignationResult({ loserPlayer, winnerPlayer, loserPeerId = null, winnerPeerId = null, source = 'unknown' }) {
+            if (gameOver) return;
+            gameOver = true;
+            currentPlayer = winnerPlayer === 2 ? 2 : 1;
+            turnDeadlineTs = null;
+            stopMoveTimerInterval();
+
+            const winnerName = getPlayerDisplayName(winnerPlayer, winnerPeerId);
+            const loserName = getPlayerDisplayName(loserPlayer, loserPeerId);
+            const countForStandings = gameModeSelect.value !== 'webxdc-tournament' || currentTournamentResultCounts();
+            if (countForStandings) {
+                scores[winnerPlayer]++;
+            }
+            if (winnerPeerId && countForStandings) {
+                ensurePlayerScoreEntry(winnerPeerId);
+                playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
+            }
+            updateAllPlayersScoreboard();
+
+            turnIndicator.innerHTML = `🚩 <strong>${loserName}</strong> resigned. <strong>${winnerName}</strong> wins!`;
+            turnIndicator.style.color = '#f1c40f';
+            updateMoveTimerDisplay();
+            if (gameModeSelect.value !== 'webxdc-tournament') {
+                startFireworks();
+            }
+
+            addNotification(
+                `Game ended: ${loserName} resigned. ${winnerName} won.`,
+                {
+                    id: `resign:${loserPeerId || loserPlayer}:${winnerPeerId || winnerPlayer}:${countMoves(board)}`,
+                    at: Date.now(),
+                    broadcast: source === 'local-resign' && isWebxdcNetworkMode()
+                }
+            );
+            if (!countForStandings && gameModeSelect.value === 'webxdc-tournament') {
+                addNotification('Tournament time expired during this match. Result not counted toward final standings.', {
+                    id: `tournament-uncounted-resign:${winnerPeerId || winnerPlayer}:${loserPeerId || loserPlayer}:${countMoves(board)}`,
+                    at: Date.now(),
+                    broadcast: true
+                });
+            }
+            playWinSound();
+            recordFinishedGame({
+                metadata: {
+                    finishType: 'resignation',
+                    loserPlayer,
+                    winnerPlayer,
+                    loserPeerId,
+                    winnerPeerId
+                }
+            });
+            if (gameModeSelect.value === 'webxdc-tournament') {
+                advanceTournamentMatch(winnerPeerId || networkPlayers[winnerPlayer] || null);
+            }
+            updateResignButtonState();
+            debugLog('RESIGNATION_APPLIED', { loserPlayer, winnerPlayer, loserPeerId, winnerPeerId, source });
+        }
+
+        // Local player concedes the focused game. Applies the result immediately and,
+        // in network modes, broadcasts it so the opponent (and any spectators) see the
+        // same outcome without waiting on a timeout.
+        function resignCurrentGame() {
+            if (timeoutResolutionInFlight) return;
+            const assignment = getResignSeatAssignment();
+            if (!assignment) return;
+            const { loserPlayer, winnerPlayer, loserPeerId = null, winnerPeerId = null } = assignment;
+            applyResignationResult({ loserPlayer, winnerPlayer, loserPeerId, winnerPeerId, source: 'local-resign' });
+            if ((gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament') && window.webxdc) {
+                sendXdcUpdate({
+                    action: 'RESIGN',
+                    loserPlayer,
+                    winnerPlayer,
+                    loserPeerId,
+                    winnerPeerId,
+                    gameId: focusedGameId || DEFAULT_GAME_ID,
+                    addr: myAddr,
+                    name: myName,
+                    peerId: myPeerId
+                }, `${getPlayerDisplayName(loserPlayer, loserPeerId)} resigned.`, 'Resignation');
+                broadcastStateSync('resignation');
+            }
+        }
+
         function tickMoveTimer() {
             maybeHandleTournamentExpiry();
             if (gameOver || !shouldRunMoveTimer()) {
@@ -3341,6 +3467,7 @@
             if (gameModeSelect.value === 'webxdc-tournament') {
                 advanceTournamentMatch(winnerPeerId);
             }
+            updateResignButtonState();
             debugLog('WITHDRAWAL_APPLIED', { quitterPeerId, winnerPeerId, source });
         }
 
@@ -3790,7 +3917,8 @@
             // Route game-scoped actions to the correct game. Actions targeting a game
             // other than the focused one are applied headlessly (spectator/background).
             const isGameScopedAction = payload.action === 'STATE' || payload.action === 'MOVE'
-                || payload.action === 'RESET' || payload.action === 'TIMEOUT' || payload.action === 'WITHDRAWAL';
+                || payload.action === 'RESET' || payload.action === 'TIMEOUT' || payload.action === 'WITHDRAWAL'
+                || payload.action === 'RESIGN';
             if (isGameScopedAction) {
                 const isTournamentWideReset = payload.action === 'RESET' && !!payload.tournamentReset;
                 const targetGid = (typeof payload.gameId === 'string' && payload.gameId) ? payload.gameId : DEFAULT_GAME_ID;
@@ -3901,6 +4029,14 @@
                 applyPeerLeft(canonicalQuitter, 'remote-update', payload.leaveEventId || `leave:${canonicalQuitter}:${Date.now()}`, payload.noteText || `${displayNameForPeer(canonicalQuitter)} left the game.`);
             } else if (payload.action === 'TIMEOUT') {
                 applyMoveTimeoutResult({
+                    loserPlayer: payload.loserPlayer === 2 ? 2 : 1,
+                    winnerPlayer: payload.winnerPlayer === 2 ? 2 : 1,
+                    loserPeerId: typeof payload.loserPeerId === 'string' ? payload.loserPeerId : null,
+                    winnerPeerId: typeof payload.winnerPeerId === 'string' ? payload.winnerPeerId : null,
+                    source: 'remote-update'
+                });
+            } else if (payload.action === 'RESIGN') {
+                applyResignationResult({
                     loserPlayer: payload.loserPlayer === 2 ? 2 : 1,
                     winnerPlayer: payload.winnerPlayer === 2 ? 2 : 1,
                     loserPeerId: typeof payload.loserPeerId === 'string' ? payload.loserPeerId : null,
@@ -6324,6 +6460,7 @@
             turnDeadlineTs = null;
             stopMoveTimerInterval();
             updateMoveTimerDisplay();
+            updateResignButtonState();
             const winnerPeerId = networkPlayers[player];
             const countForStandings = gameModeSelect.value !== 'webxdc-tournament' || currentTournamentResultCounts();
             if (countForStandings) {
@@ -6381,6 +6518,7 @@
         }
 
         function updateTurnIndicator() {
+            updateResignButtonState();
             const name = currentPlayer === 1 ? p1NameInput.value : p2NameInput.value;
             const color = currentPlayer === 1 ? '(Black)' : '(White)';
             const activePeerId = networkPlayers[currentPlayer] || null;
@@ -6483,6 +6621,9 @@
                 pveSeatSeed: gameModeSelect.value === 'pve' ? createSeatSeed() : null
             });
         });
+        if (resignBtn) {
+            resignBtn.addEventListener('click', resignCurrentGame);
+        }
         if (titleEl) {
             titleEl.addEventListener('click', () => {
                 const now = Date.now();

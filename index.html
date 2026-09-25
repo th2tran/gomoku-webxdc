@@ -482,6 +482,7 @@
             text-align: left;
             background: #52677d;
             color: white;
+            font-size: 13px;
             border: 1px solid rgba(255,255,255,0.08);
         }
         .game-history-entry {
@@ -822,6 +823,9 @@
         button { background-color: #27ae60; color: white; transition: background 0.3s; }
         button:hover { background-color: #2ecc71; }
         button:disabled { background-color: #7f8c8d; cursor: not-allowed; }
+        .resign-btn { background-color: #c0392b; }
+        .resign-btn:hover { background-color: #e74c3c; }
+        .resign-btn:disabled { background-color: #7f8c8d; }
 
         .debug-popup {
             display: none;
@@ -1463,6 +1467,7 @@
                     </select>
                 </div>
                 <button id="reset-btn">Reset Board / Sync</button>
+                <button id="resign-btn" class="resign-btn" disabled>Resign</button>
             </div>
 
             <div class="current-match-panel">

@@ -108,6 +108,49 @@ test('tournament: spectating bye auto-switches to own board when its match begin
     assertNoErrors(peers);
 });
 
+// Regression test for a bug where a new tournament round did not reset both
+// players' move clocks, only the current player's (via
+// startMoveTimerForCurrentTurn's resetDeadline). A seat's leftover
+// playerRemainingMs/playerTurnStartedAt from a prior match could carry over
+// into the new match; if that leftover value was near-zero, the very first
+// tick of the new match's timer would resolve as an almost-instant timeout —
+// matching the reported "game ended within seconds of starting" bug.
+test('tournament: starting a new round resets both players\' move clocks to the full time budget', async () => {
+    const { peers, byId } = boot(['Alice', 'Bob', 'Carol']);
+    H.setMode(peers[0], 'webxdc-tournament');
+    skipCountdown(peers);
+
+    playCurrentRound(peers, byId, 7);
+    for (const p of peers) {
+        assert.ok(H.ev(p, 'currentRoundRecords().every((r) => r.gameOver)'), `${p.name} sees round 1 complete`);
+    }
+
+    // Simulate a seat carrying near-expired leftover clock state into the next
+    // round — e.g. as could linger from this client's own prior match/turn.
+    for (const p of peers) {
+        H.ev(p, 'playerRemainingMs[1] = 50; playerRemainingMs[2] = 50; playerTurnStartedAt[1] = null; playerTurnStartedAt[2] = null;');
+    }
+
+    await sleep(5500);
+
+    for (const p of peers) {
+        assert.equal(H.ev(p, 'tournamentState.roundIndex'), 1, `${p.name} advanced to round 2`);
+        assert.equal(H.ev(p, 'playerRemainingMs[1]'), H.ev(p, 'moveTimeLimitMs'), `${p.name}: player 1 clock reset to the full budget`);
+        assert.equal(H.ev(p, 'playerRemainingMs[2]'), H.ev(p, 'moveTimeLimitMs'), `${p.name}: player 2 clock reset to the full budget`);
+        assert.equal(H.ev(p, 'gameOver'), false, `${p.name}: new match is not already over`);
+        assert.doesNotMatch(H.$(p, '#turn-indicator').textContent, /ran out of time/, `${p.name}: no premature timeout`);
+    }
+
+    // Give the 250ms timer tick a couple more cycles to run against the fresh
+    // clock — it must not resolve a timeout immediately after the reset.
+    await sleep(1000);
+    for (const p of peers) {
+        assert.equal(H.ev(p, 'gameOver'), false, `${p.name}: match still in progress after the reset`);
+        assert.doesNotMatch(H.$(p, '#turn-indicator').textContent, /ran out of time/, `${p.name}: still no premature timeout`);
+    }
+    assertNoErrors(peers);
+});
+
 test('tournament: moves in one match never leak into the concurrent match', () => {
     const { peers, byId } = boot(['Alice', 'Bob', 'Carol', 'Dave']);
     H.setMode(peers[0], 'webxdc-tournament');

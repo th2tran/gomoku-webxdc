@@ -632,6 +632,15 @@
             }
             stopMoveTimerInterval();
             turnDeadlineTs = null;
+            // Each new round pairs up a fresh match — reset BOTH players' clocks to the
+            // full time budget, not just the current player's. startMoveTimerForCurrentTurn
+            // with resetDeadline only resets currentPlayer's clock, leaving the other
+            // seat's playerRemainingMs/playerTurnStartedAt as whatever they were left at
+            // from this client's previous game (its own prior match, or a spectated one).
+            // If that leftover value was near-zero, the next time that seat gets a turn it
+            // would resolve as an almost-instant timeout — the bug reported where a
+            // tournament match ended within seconds of starting.
+            resetPlayerGameClocks();
             startMoveTimerForCurrentTurn({ resetDeadline: true });
             updateTurnIndicator();
             updateTournamentMatchDisplay();

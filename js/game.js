@@ -115,6 +115,18 @@
             return gameModeSelect.value === 'webxdc' || gameModeSelect.value === 'webxdc-tournament';
         }
 
+        // Resolve a game record seat's display name for the Games In Progress panel.
+        // In network modes the seat is identified by peerId; in local modes (pve/pvp)
+        // there is no peerId, so displayNameForPeer(null) would otherwise mask the
+        // real recorded name (e.g. "Computer") behind its "Unknown player" fallback.
+        function panelSeatName(rec, seat, fallback) {
+            const peerId = rec.players[seat];
+            if (peerId) return displayNameForPeer(peerId);
+            const recordedName = rec.names[seat];
+            if (typeof recordedName === 'string' && recordedName.trim()) return cleanPlayerName(recordedName);
+            return fallback;
+        }
+
         // Write the live globals of the focused game back into its record.
         function snapshotFocusedGame() {
             if (!focusedGameId) return;
@@ -284,16 +296,16 @@
 
                 const players = document.createElement('div');
                 players.className = 'game-in-progress-players';
-                const n1 = displayNameForPeer(rec.players[1]) || rec.names[1] || 'Player 1';
-                const n2 = displayNameForPeer(rec.players[2]) || rec.names[2] || 'Player 2';
+                const n1 = panelSeatName(rec, 1, 'Player 1');
+                const n2 = panelSeatName(rec, 2, 'Player 2');
                 players.textContent = `${n1} vs ${n2}`;
                 item.appendChild(players);
 
                 const meta = document.createElement('div');
                 meta.className = 'game-in-progress-meta';
                 const turnName = rec.gameOver
-                    ? (rec.winnerPlayer ? `${(displayNameForPeer(rec.players[rec.winnerPlayer]) || rec.names[rec.winnerPlayer])} won` : 'Finished')
-                    : `${(displayNameForPeer(rec.players[rec.currentPlayer]) || rec.names[rec.currentPlayer] || '')}'s turn`;
+                    ? (rec.winnerPlayer ? `${panelSeatName(rec, rec.winnerPlayer, '')} won` : 'Finished')
+                    : `${panelSeatName(rec, rec.currentPlayer, '')}'s turn`;
                 const roundText = Number.isInteger(rec.round) ? `Round ${rec.round + 1} · ` : '';
                 meta.textContent = `${roundText}${rec.moveCount} moves · ${turnName}`;
                 item.appendChild(meta);

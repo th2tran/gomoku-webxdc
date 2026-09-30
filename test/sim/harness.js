@@ -61,7 +61,7 @@ function makePeer(net, addr, name) {
         pretendToBeVisual: true,
         url: 'https://sim.local/index.html',
         beforeParse(window) {
-            window.GOMOKU_APP_VERSION = 'sim';
+            window.APP_VERSION = 'sim';
             window.webxdc = {
                 selfAddr: addr,
                 selfName: name,

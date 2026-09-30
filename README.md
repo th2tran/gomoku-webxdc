@@ -7,6 +7,8 @@ Gomoku WebXDC is a browser-based Gomoku (Five in a Row) game packaged as a WebXD
 - Classic 15x15 Gomoku board
 - Local pass-and-play mode
 - Local vs computer mode
+- Rapfi WebAssembly powers the Sifu opponent on Hard difficulty, with the
+  JavaScript Sifu engine retained as an automatic compatibility fallback
 - Network mode for two players over WebXDC
 - Tournament mode with concurrent paired rounds and standings
 - "Games In Progress" panel to follow every active game and spectate any of them
@@ -86,6 +88,8 @@ dist/gomoku-0.2.73.xdc
 - `index.html`: game UI, rules, networking logic, tournament logic, and WebXDC integration.
 - `package.json`: build scripts and package metadata.
 - `js/`: game engine sources (`sifu.js`, `worker.js`) and generated `version.js` version metadata.
+- `third_party/rapfi/`: Rapfi WebAssembly runtime, model data, license, and
+  corresponding-source information.
 - `test/`: Node-based unit tests for the AI engine (run with `npm test`).
 - `dist/`: packaged WebXDC output.
 
@@ -94,3 +98,6 @@ dist/gomoku-0.2.73.xdc
 - This app is intentionally centered in a single HTML file for portability and WebXDC packaging simplicity.
 - Multiplayer behavior depends on the WebXDC host runtime and message delivery semantics, especially for realtime updates and presence detection.
 - Tournament mode is intended for connected users who want a full bracket-style match flow rather than a single direct match.
+- The bundled Rapfi engine is GPL-3.0-or-later software. Its license, authors,
+  artifact checksums, and corresponding-source links are in
+  `third_party/rapfi/`.

@@ -1,14 +1,15 @@
 {
   "name": "gomoku-webxdc",
-  "version": "0.9.252",
+  "version": "0.10.0+256",
   "description": "Gomoku game packaged for WebXDC",
   "main": "index.html",
   "scripts": {
     "start": "webxdc-dev",
     "test": "node --test",
-    "sync-version": "node -e \"const fs=require('fs');const v=require('./package.json').version;fs.writeFileSync('js/version.js', 'window.GOMOKU_APP_VERSION = ' + JSON.stringify(v) + ';\\\\n');\"",
-    "build": "npm version patch --no-git-tag-version && npm run sync-version && npm run build:xdc",
-    "build:xdc": "npm run sync-version && bestzip dist/gomoku-$(node -p \"require('./package.json').version\").xdc manifest.toml index.html js/game.js js/worker.js js/sifu.js gomoku.png js/version.js"
+    "bump-buildnumber": "node -e \"const fs=require('fs');const rd=f=>JSON.parse(fs.readFileSync(f,'utf8'));const wr=(f,j)=>fs.writeFileSync(f,JSON.stringify(j,null,2)+'\\n');const p=rd('package.json');const m=/^(\\d+\\.\\d+\\.\\d+)(?:\\+(\\d+))?$/.exec(p.version);if(!m){console.error('Unsupported version: '+p.version);process.exit(1);}p.version=m[1]+'+'+((m[2]?+m[2]:0)+1);wr('package.json',p);if(fs.existsSync('package-lock.json')){const l=rd('package-lock.json');l.version=p.version;if(l.packages&&l.packages[''])l.packages[''].version=p.version;wr('package-lock.json',l);}console.log(p.version);\"",
+    "sync-version": "node -e \"const fs=require('fs');const v=require('./package.json').version.replace('+','.');fs.writeFileSync('./js/version.js', 'window.APP_VERSION = ' + JSON.stringify(v) + ';\\\\n');\"",
+    "build": "npm run bump-buildnumber && npm run sync-version && npm run build:xdc",
+    "build:xdc": "npm run sync-version && bestzip dist/gomoku-$(node -p \"require('./package.json').version.replace('+','.')\").xdc manifest.toml index.html js/game.js js/worker.js js/sifu.js js/rapfi-worker.js third_party/rapfi/rapfi.js third_party/rapfi/rapfi.wasm third_party/rapfi/rapfi.data third_party/rapfi/COPYING.txt third_party/rapfi/AUTHORS third_party/rapfi/SOURCE.md gomoku.png js/version.js"
   },
   "keywords": [
     "webxdc",

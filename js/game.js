@@ -1,5 +1,5 @@
         const boardSize = 15;
-        const appVersion = (window.GOMOKU_APP_VERSION && String(window.GOMOKU_APP_VERSION).trim()) || 'dev';
+        const appVersion = (window.APP_VERSION && String(window.APP_VERSION).trim()) || 'dev';
         let board = [];
         let currentPlayer = 1; 
         let gameOver = false;
@@ -2530,7 +2530,7 @@
         }
 
         function createComputerWorker() {
-            const workerPath = getSelectedDifficultyDepth() >= 6 ? 'js/sifu.js' : 'js/worker.js';
+            const workerPath = getSelectedDifficultyDepth() >= 6 ? 'js/rapfi-worker.js' : 'js/worker.js';
             if (computerWorker && computerWorker.__enginePath === workerPath) return computerWorker;
             if (computerWorker) {
                 computerWorker.terminate();

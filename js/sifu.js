@@ -1366,9 +1366,149 @@ function findOpenThreeBlockingMoves(board, player) {
     });
 }
 
+function getSearchProfile(payload = {}) {
+    const requestedDepth = Number.isInteger(payload.depth) && payload.depth > 0
+        ? payload.depth
+        : Number.isInteger(payload.initialDepth) && payload.initialDepth > 0
+            ? payload.initialDepth
+            : null;
+    const depth = requestedDepth ?? (payload.isHard || payload.useStrongHeuristics ? 6 : 4);
+    const isHard = Boolean(payload.isHard || payload.useStrongHeuristics) || depth >= 6;
+    const candidateLimit = Number.isInteger(payload.candidateLimit) && payload.candidateLimit > 0
+        ? Math.min(payload.candidateLimit, 24)
+        : isHard ? 10 : depth <= 2 ? 10 : 14;
+
+    return {
+        depth,
+        isHard,
+        forcedWinDepth: 4,
+        candidateLimit
+    };
+}
+
+function evaluateSearchBoard(board, player) {
+    let score = 0;
+    const opponent = player === BLACK ? WHITE : BLACK;
+    for (const [dr, dc] of DIRECTIONS) {
+        for (let r = 0; r < SIZE; r++) {
+            for (let c = 0; c < SIZE; c++) {
+                const endR = r + dr * 4;
+                const endC = c + dc * 4;
+                if (!inBounds(endR, endC)) continue;
+                const line = [];
+                for (let step = 0; step < 5; step++) {
+                    line.push(board[r + dr * step][c + dc * step]);
+                }
+                score += scoreWindow(line, player) - scoreWindow(line, opponent);
+            }
+        }
+    }
+    return score;
+}
+
+function searchQuietMove(board, aiPlayer, options = {}) {
+    const maxDepth = Number.isInteger(options.depth) && options.depth > 0
+        ? Math.min(4, options.depth)
+        : 2;
+    const candidateLimit = Number.isInteger(options.candidateLimit) && options.candidateLimit > 0
+        ? Math.min(24, options.candidateLimit)
+        : 10;
+    const nodeBudget = Number.isInteger(options.nodeBudget) && options.nodeBudget > 0
+        ? options.nodeBudget
+        : maxDepth <= 2 ? 400 : 4000;
+    const opponent = aiPlayer === BLACK ? WHITE : BLACK;
+    const winScore = 10_000_000;
+    let nodes = 0;
+    let maxDepthReached = 0;
+
+    function orderedMoves(position, player, forcedBlock) {
+        const candidates = forcedBlock?.length
+            ? forcedBlock
+            : getCandidateMoves(position, player, candidateLimit);
+        return candidates.map((move) => ({
+            ...move,
+            score: scoreLocalThreatMove(position, move.r, move.c, player)
+        })).sort((a, b) => b.score - a.score).slice(0, candidateLimit);
+    }
+
+    function visit(position, playerToMove, remainingDepth, ply, alpha, beta, branchBudget) {
+        if (branchBudget.nodes >= branchBudget.limit) {
+            branchBudget.exhausted = true;
+            return evaluateSearchBoard(position, aiPlayer);
+        }
+        nodes++;
+        branchBudget.nodes++;
+        maxDepthReached = Math.max(maxDepthReached, ply);
+
+        const winningMove = findImmediateWin(position, playerToMove);
+        if (winningMove) return playerToMove === aiPlayer ? winScore - ply : -winScore + ply;
+        if (remainingDepth === 0) return evaluateSearchBoard(position, aiPlayer);
+
+        const other = playerToMove === BLACK ? WHITE : BLACK;
+        const opponentWins = enumerateImmediateWinningMoves(position, other);
+        if (opponentWins.length > 1) return playerToMove === aiPlayer ? -winScore + ply : winScore - ply;
+        const moves = orderedMoves(position, playerToMove, opponentWins);
+        if (!moves.length) return evaluateSearchBoard(position, aiPlayer);
+
+        const maximizing = playerToMove === aiPlayer;
+        let bestScore = maximizing ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
+        for (const move of moves) {
+            position[move.r][move.c] = playerToMove;
+            const score = isWinAfterMove(position, move.r, move.c, playerToMove)
+                ? (maximizing ? winScore - ply : -winScore + ply)
+                : visit(position, other, remainingDepth - 1, ply + 1, alpha, beta, branchBudget);
+            position[move.r][move.c] = EMPTY;
+
+            if (maximizing) {
+                bestScore = Math.max(bestScore, score);
+                alpha = Math.max(alpha, bestScore);
+            } else {
+                bestScore = Math.min(bestScore, score);
+                beta = Math.min(beta, bestScore);
+            }
+            if (beta <= alpha || branchBudget.exhausted) break;
+        }
+        return bestScore;
+    }
+
+    const working = cloneBoard(board);
+    const rootMoves = orderedMoves(working, aiPlayer);
+    let bestMove = rootMoves[0] ? { r: rootMoves[0].r, c: rootMoves[0].c } : null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    let alpha = Number.NEGATIVE_INFINITY;
+    let remainingNodeBudget = nodeBudget;
+
+    for (let i = 0; i < rootMoves.length; i++) {
+        const move = rootMoves[i];
+        const remainingRootMoves = rootMoves.length - i;
+        const branchBudget = {
+            nodes: 0,
+            limit: Math.ceil(remainingNodeBudget / remainingRootMoves),
+            exhausted: false
+        };
+        working[move.r][move.c] = aiPlayer;
+        const score = isWinAfterMove(working, move.r, move.c, aiPlayer)
+            ? winScore
+            : remainingNodeBudget > 0
+                ? visit(working, opponent, maxDepth - 1, 1, alpha, Number.POSITIVE_INFINITY, branchBudget)
+                : evaluateSearchBoard(working, aiPlayer);
+        working[move.r][move.c] = EMPTY;
+        remainingNodeBudget -= branchBudget.nodes;
+
+        if (score > bestScore) {
+            bestMove = { r: move.r, c: move.c };
+            bestScore = score;
+        }
+        alpha = Math.max(alpha, bestScore);
+    }
+
+    return { move: bestMove, score: bestScore, nodes, maxDepthReached };
+}
+
 function chooseMove(board, payload) {
     const aiPlayer = Number.isInteger(payload.aiPlayer) ? payload.aiPlayer : BLACK;
     const humanPlayer = Number.isInteger(payload.humanPlayer) ? payload.humanPlayer : (aiPlayer === BLACK ? WHITE : BLACK);
+    const searchProfile = getSearchProfile(payload);
     const moveCount = countMoves(board);
     const boardCopy = cloneBoard(board);
 
@@ -1378,7 +1518,7 @@ function chooseMove(board, payload) {
     const forcedBlock = findImmediateBlock(boardCopy, aiPlayer);
     if (forcedBlock) return forcedBlock;
 
-    const forcedWinDepth = 4;
+    const forcedWinDepth = searchProfile.forcedWinDepth;
 
     // An existing open three / four is an immediate forcing threat: if left
     // unanswered the opponent converts it into an (open) four and wins. Block it
@@ -1407,7 +1547,7 @@ function chooseMove(board, payload) {
     // Seize the initiative when we have a forced win of our own: continuous
     // threats leave the opponent no tempo to execute theirs. VCF (fours only)
     // is cheap and deep, so try it first; VCT (threes and fours) second.
-    if (payload.isHard) {
+    if (searchProfile.isHard) {
         const myVcf = findVcfSequence(boardCopy, aiPlayer, humanPlayer, 12, { nodes: 6000 });
         if (myVcf) return myVcf.move;
         const myForcedWin = findForcedWinSequence(boardCopy, aiPlayer, humanPlayer, forcedWinDepth, { nodes: FORCED_WIN_NODE_BUDGET });
@@ -1425,7 +1565,7 @@ function chooseMove(board, payload) {
     const urgentLiveThreeBlock = findUrgentLiveThreeBlock(boardCopy, aiPlayer);
     if (urgentLiveThreeBlock) return urgentLiveThreeBlock;
 
-    if (payload.isHard) {
+    if (searchProfile.isHard) {
         const preemptiveForkDefense = findPreemptiveForkDefense(boardCopy, aiPlayer);
         if (preemptiveForkDefense) return preemptiveForkDefense;
     }
@@ -1434,12 +1574,12 @@ function chooseMove(board, payload) {
     // as the evaluator. A proven root means the move leads to a forced win
     // even against non-forced (quiet) defences that VCF/VCT alone cannot see.
     let pnsResult = null;
-    if (payload.isHard) {
+    if (searchProfile.isHard) {
         pnsResult = proofNumberSearch(boardCopy, aiPlayer, humanPlayer, { maxNodes: 400, timeLimitMs: 1000, tssDepth: 3 });
         if (pnsResult.proven && pnsResult.move) return pnsResult.move;
     }
 
-    if (payload.isHard) {
+    if (searchProfile.isHard) {
         const attackSequence = runThreatSpaceSearch(boardCopy, aiPlayer, humanPlayer, 3);
         if (attackSequence) return attackSequence.move;
 
@@ -1519,7 +1659,16 @@ function chooseMove(board, payload) {
         }
     }
 
-    const candidates = getCandidateMoves(boardCopy, aiPlayer, moveCount < 8 ? 12 : 8);
+    const candidateLimit = searchProfile.candidateLimit ?? (moveCount < 8 ? 12 : 8);
+    if (!searchProfile.isHard) {
+        return searchQuietMove(boardCopy, aiPlayer, {
+            depth: searchProfile.depth,
+            candidateLimit,
+            nodeBudget: searchProfile.depth <= 2 ? 400 : 4000
+        }).move;
+    }
+
+    const candidates = getCandidateMoves(boardCopy, aiPlayer, candidateLimit);
     if (!candidates.length) {
         for (let r = 0; r < SIZE; r++) {
             for (let c = 0; c < SIZE; c++) {
@@ -1609,6 +1758,8 @@ if (typeof module !== 'undefined' && module.exports) {
         moveAvoidsForcedLoss,
         findVcfSequence,
         proofNumberSearch,
+        getSearchProfile,
+        searchQuietMove,
         chooseMove,
         handleMessage
     };

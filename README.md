@@ -35,6 +35,15 @@ When the app runs in a WebXDC environment, it can discover peers and maintain a 
 - synchronize resets and tournament mode changes
 - notify when a player leaves or forfeits
 
+When the host supplies sender-address metadata in the update envelope, the app
+checks it against the claimed address and binds session peer IDs to that sender.
+Mismatched identities are rejected before processing or message deduplication.
+The standard WebXDC API does not supply authenticated sender metadata, and its
+realtime API supplies only bytes. For compatibility, messages on these
+transports are still accepted, with a console warning that identities are
+unverified. This is not cryptographic authentication and cannot prevent
+impersonation on transports without trusted sender metadata.
+
 In network mode, any peer can start a game by tapping another peer in the connected-players list and sending a challenge; once accepted, the pair is seated. Several 2-player games can run at the same time in one chat. Every game broadcasts its state to all peers, and the **Games In Progress** panel lists them; a peer who is not currently playing can tap any listed game to spectate it live.
 
 ### Tournament mode
@@ -85,17 +94,31 @@ dist/gomoku-0.2.73.xdc
 
 ## Project structure
 
-- `index.html`: game UI, rules, networking logic, tournament logic, and WebXDC integration.
+- `index.html`: game UI and ordered script loading.
+- `js/game.js`: shared game state, core game orchestration, and application bootstrap.
+- `js/network.js`: WebXDC transport, sender validation, presence, and synchronization.
+- `js/render.js`: board and UI rendering.
+- `js/tournament.js`: tournament scheduling and lifecycle.
+- `js/replay.js`: game history, SGF import/export, and replay.
+- `js/ai-manager.js`: computer-opponent selection and turn management.
 - `package.json`: build scripts and package metadata.
-- `js/`: game engine sources (`sifu.js`, `worker.js`) and generated `version.js` version metadata.
+- `js/sifu.js`: shared JavaScript AI engine for easy/medium play and the hard-mode fallback.
+- `js/worker.js`: thin worker entry point for the shared engine.
+- `js/rapfi-worker.js`: hard-mode Rapfi integration with the shared JavaScript fallback.
+- `js/version.js`: generated version metadata.
 - `third_party/rapfi/`: Rapfi WebAssembly runtime, model data, license, and
   corresponding-source information.
-- `test/`: Node-based unit tests for the AI engine (run with `npm test`).
+- `test/`: Node-based AI tests and multi-peer browser simulations (run with `npm test`).
 - `dist/`: packaged WebXDC output.
 
 ## Notes
 
-- This app is intentionally centered in a single HTML file for portability and WebXDC packaging simplicity.
+- The app uses ordered classic scripts without a bundler. Subsystem functions
+  share the state owned by `game.js`; load the subsystem scripts before
+  `game.js`, which initializes the application.
+- Debug logging is disabled in production by `const DEBUG = false` in
+  `js/game.js`. Set it to `true` in a development build to enable the debug panel's log.
+- The bundled icon is a 512x512 PNG, kept below 1 MB.
 - Multiplayer behavior depends on the WebXDC host runtime and message delivery semantics, especially for realtime updates and presence detection.
 - Tournament mode is intended for connected users who want a full bracket-style match flow rather than a single direct match.
 - The bundled Rapfi engine is GPL-3.0-or-later software. Its license, authors,

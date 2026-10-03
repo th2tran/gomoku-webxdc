@@ -1683,6 +1683,12 @@
     <div class="toast-stack" id="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
     <script src="js/version.js"></script>
+    <!-- These classic scripts share game.js globals; load declarations before game.js bootstrap. -->
+    <script src="js/network.js"></script>
+    <script src="js/render.js"></script>
+    <script src="js/tournament.js"></script>
+    <script src="js/replay.js"></script>
+    <script src="js/ai-manager.js"></script>
     <script src="js/game.js"></script>
 </body>
 </html>

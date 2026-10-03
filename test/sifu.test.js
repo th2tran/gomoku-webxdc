@@ -4,7 +4,63 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const sifu = require('../js/sifu.js');
-const { BLACK, WHITE, boardFromSgf, sameCell } = require('./helpers.js');
+const { BLACK, WHITE, boardFromSgf, boardFromMoves, sameCell } = require('./helpers.js');
+
+test('search profile preserves easy, medium, and hard request levels', () => {
+    assert.deepEqual(sifu.getSearchProfile({ depth: 2, candidateLimit: 10 }), {
+        depth: 2,
+        isHard: false,
+        forcedWinDepth: 4,
+        candidateLimit: 10
+    });
+    assert.deepEqual(sifu.getSearchProfile({ depth: 4, candidateLimit: 14 }), {
+        depth: 4,
+        isHard: false,
+        forcedWinDepth: 4,
+        candidateLimit: 14
+    });
+    assert.deepEqual(sifu.getSearchProfile({ depth: 6 }), {
+        depth: 6,
+        isHard: true,
+        forcedWinDepth: 4,
+        candidateLimit: 10
+    });
+    assert.equal(sifu.getSearchProfile({ initialDepth: 6 }).isHard, true);
+    assert.equal(sifu.getSearchProfile({ depth: 5, useStrongHeuristics: true }).isHard, true);
+    assert.equal(sifu.getSearchProfile({ depth: 2 }).candidateLimit, 10);
+    assert.equal(sifu.getSearchProfile({ depth: 4 }).candidateLimit, 14);
+});
+
+test('quiet easy and medium moves use their requested minimax depths', () => {
+    const board = boardFromMoves([
+        'B hh', 'W jc', 'B bm', 'W dn', 'B oa', 'W ac'
+    ]);
+    const snapshot = JSON.stringify(board);
+    const easySearch = sifu.searchQuietMove(board, BLACK, {
+        depth: 2,
+        candidateLimit: 10,
+        nodeBudget: 400
+    });
+    const mediumSearch = sifu.searchQuietMove(board, BLACK, {
+        depth: 4,
+        candidateLimit: 14,
+        nodeBudget: 4000
+    });
+
+    assert.equal(easySearch.maxDepthReached, 2);
+    assert.equal(mediumSearch.maxDepthReached, 4);
+    assert.ok(mediumSearch.nodes > easySearch.nodes, 'medium search should explore more positions');
+    assert.notDeepEqual(easySearch.move, mediumSearch.move, 'the additional plies should affect quiet move selection');
+    assert.deepEqual(
+        sifu.chooseMove(board, { aiPlayer: BLACK, humanPlayer: WHITE, depth: 2 }),
+        easySearch.move
+    );
+    assert.deepEqual(
+        sifu.chooseMove(board, { aiPlayer: BLACK, humanPlayer: WHITE, depth: 4 }),
+        mediumSearch.move
+    );
+    assert.equal(JSON.stringify(board), snapshot, 'search should leave the input board untouched');
+});
 
 // A finished game (gomoku-webxdc:0.8.239) up to Black's 15th move. Black has
 // just played jh, creating an anti-diagonal open three:

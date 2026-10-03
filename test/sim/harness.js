@@ -21,11 +21,13 @@ function closeAll() {
 afterEach(closeAll);
 
 const rawHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
-const gameScript = fs.readFileSync(path.join(__dirname, '..', '..', 'js', 'game.js'), 'utf8');
+const scriptFiles = Array.from(
+    rawHtml.matchAll(/<script src="(js\/[^"]+)"><\/script>/g),
+    (match) => match[1]
+);
+const scripts = scriptFiles.map((file) => fs.readFileSync(path.join(__dirname, '..', '..', file), 'utf8'));
 const html = rawHtml
-    .replace('<script src="webxdc.js"></script>', '')
-    .replace(/<script src="js\/version\.js"><\/script>/, '')
-    .replace(/<script src="js\/game\.js"><\/script>/, '');
+    .replace(/<script\b[^>]*\bsrc=["'][^"']+["'][^>]*><\/script>/g, '');
 
 class Network {
     constructor() { this.peers = []; this.serial = 0; this.log = []; this.queue = []; this.flushing = false; }
@@ -85,11 +87,13 @@ function makePeer(net, addr, name) {
     peer.doc = dom.window.document;
     net.add(peer);
     livePeers.add(peer);
-    // Inject as a real script element so top-level let/const become global
-    // lexical bindings visible to later window.eval() calls.
-    const script = dom.window.document.createElement('script');
-    script.textContent = gameScript;
-    dom.window.document.body.appendChild(script);
+    // Inject the production classic-script order so top-level declarations share
+    // one global environment and are available to later window.eval() calls.
+    for (const source of scripts) {
+        const script = dom.window.document.createElement('script');
+        script.textContent = source;
+        dom.window.document.body.appendChild(script);
+    }
     return peer;
 }
 

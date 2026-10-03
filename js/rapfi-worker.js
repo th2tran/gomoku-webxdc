@@ -1,14 +1,15 @@
-// Sifu's browser worker facade backed by Rapfi WebAssembly.
-// The legacy JavaScript Sifu engine remains available as a safe fallback.
+// Hard-mode worker: Rapfi is primary, with the shared Sifu JavaScript engine
+// handling non-hard requests and serving as the fallback.
 importScripts('sifu.js');
 
-const legacySifuHandler = self.onmessage;
+const sifuHandler = self.onmessage;
 const BOARD_SIZE = 15;
 const RAPFI_DIR = '../third_party/rapfi/';
 
 let rapfiInstance = null;
 let rapfiFailed = false;
 let pendingRequest = null;
+let rapfiReady = null;
 
 function isValidBoard(board) {
     return Array.isArray(board)
@@ -36,14 +37,14 @@ function fromRapfiCoordinate(x, y) {
     return { r: BOARD_SIZE - 1 - y, c: x };
 }
 
-function useLegacySifu(request, reason) {
+function useSifuFallback(request, reason) {
     postMessage({
         type: 'progress',
         stage: 'engine-fallback',
         engine: 'sifu-js',
         reason
     });
-    legacySifuHandler({ data: request });
+    sifuHandler({ data: request });
 }
 
 function handleRapfiOutput(output) {
@@ -60,7 +61,7 @@ function handleRapfiOutput(output) {
             && request.board[move.r]?.[move.c] === 0) {
             postMessage({ type: 'move', token: request.token, move, engine: 'rapfi-wasm' });
         } else {
-            useLegacySifu(request, 'rapfi-returned-invalid-move');
+            useSifuFallback(request, 'rapfi-returned-invalid-move');
         }
         return;
     }
@@ -68,7 +69,7 @@ function handleRapfiOutput(output) {
     if (line.startsWith('ERROR') && pendingRequest) {
         const request = pendingRequest;
         pendingRequest = null;
-        useLegacySifu(request, line);
+        useSifuFallback(request, line);
     }
 }
 
@@ -101,16 +102,21 @@ async function loadRapfi() {
     return rapfiInstance;
 }
 
-const rapfiReady = loadRapfi().catch((error) => {
-    rapfiFailed = true;
-    postMessage({
-        type: 'progress',
-        stage: 'engine-unavailable',
-        engine: 'rapfi-wasm',
-        message: error instanceof Error ? error.message : String(error)
-    });
-    return null;
-});
+function getRapfiReady() {
+    if (!rapfiReady) {
+        rapfiReady = loadRapfi().catch((error) => {
+            rapfiFailed = true;
+            postMessage({
+                type: 'progress',
+                stage: 'engine-unavailable',
+                engine: 'rapfi-wasm',
+                message: error instanceof Error ? error.message : String(error)
+            });
+            return null;
+        });
+    }
+    return rapfiReady;
+}
 
 self.onmessage = async (event) => {
     const request = event.data || {};
@@ -119,13 +125,20 @@ self.onmessage = async (event) => {
         return;
     }
 
-    const engine = await rapfiReady;
-    if (!engine || rapfiFailed || pendingRequest) {
-        useLegacySifu(request, engine ? 'rapfi-busy' : 'rapfi-unavailable');
+    const depth = Number.isInteger(request.depth) ? request.depth : request.initialDepth;
+    const isHard = Boolean(request.isHard) || (Number.isInteger(depth) && depth >= 6);
+    if (!isHard) {
+        sifuHandler({ data: request });
         return;
     }
 
-    const thinkTimeMs = request.isHard ? 1800 : 900;
+    const engine = await getRapfiReady();
+    if (!engine || rapfiFailed || pendingRequest) {
+        useSifuFallback(request, engine ? 'rapfi-busy' : 'rapfi-unavailable');
+        return;
+    }
+
+    const thinkTimeMs = isHard ? 1800 : 900;
     try {
         engine.sendCommand('INFO RULE 0');
         engine.sendCommand(`INFO TIMEOUT_TURN ${thinkTimeMs}`);
@@ -141,7 +154,7 @@ self.onmessage = async (event) => {
         engine.sendCommand(toRapfiBoardCommand(request.board));
     } catch (error) {
         pendingRequest = null;
-        useLegacySifu(
+        useSifuFallback(
             request,
             error instanceof Error ? error.message : 'rapfi-search-failed'
         );

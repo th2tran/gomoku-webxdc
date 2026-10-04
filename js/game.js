@@ -500,6 +500,7 @@
         let notificationsTabTop = Math.floor(window.innerHeight / 2);
         let webxdcRealtimeChannel = null;
         let outgoingMessageSeq = 0;
+        let lastGameStateRequest = null;
         let notificationSeq = 0;
         const seenMessageIds = new Set();
         const seenMessageIdQueue = [];
@@ -1971,8 +1972,15 @@
                         expectedPlayer: localPlayerNumber,
                         actualPlayer: currentPlayer,
                         myPeerId,
-                        networkPlayers
+                        networkPlayers,
+                        gameId: focusedGameId,
+                        moveCount: countMoves(board),
+                        roundIndex: tournamentState.roundIndex,
+                        cycle: tournamentState.cycle,
+                        matchNumber: tournamentState.matchNumber,
+                        seatSeed: tournamentState.seatSeed
                     });
+                    requestFocusedGameState('tournament-turn-mismatch');
                     return;
                     }
                 }

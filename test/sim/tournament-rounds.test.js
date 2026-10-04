@@ -248,6 +248,95 @@ test('tournament: moves in one match never leak into the concurrent match', () =
     assertNoErrors(peers);
 });
 
+test('tournament: a blocked White move recovers missed match updates from its opponent', () => {
+    const { net, peers, byId } = boot(['Alice', 'Bob', 'Carol', 'Dave', 'Erin']);
+    H.setMode(peers[0], 'webxdc-tournament');
+    skipCountdown(peers);
+    const recs = JSON.parse(H.ev(peers[0], 'JSON.stringify(currentRoundRecords().map((r) => ({ id: r.id, players: r.players })))'));
+    const rec = recs[0];
+    const black = byId[rec.players[1]];
+    const white = byId[rec.players[2]];
+    const listener = white.listener;
+    white.listener = (update) => {
+        if (update.payload.gameId === rec.id && ['MOVE', 'STATE'].includes(update.payload.action)) return;
+        listener(update);
+    };
+    H.clickCell(black, 7, 7);
+    white.listener = listener;
+    assert.equal(H.ev(black, 'currentPlayer'), 2);
+    assert.equal(H.ev(white, 'currentPlayer'), 1, 'missed updates leave White waiting for Black');
+
+    // The opponent can still answer for its own match while spectating another.
+    H.ev(black, `focusGame(${JSON.stringify(recs[1].id)})`);
+    const unrelatedBoards = peers.map((p) => H.ev(p, `JSON.stringify(games.get(${JSON.stringify(recs[1].id)}).board)`));
+    H.clickCell(white, 7, 8);
+    assert.equal(H.ev(white, 'board[7][8]'), 0, 'blocked click is not replayed as a move');
+    assert.equal(H.ev(white, 'board[7][7]'), 1, 'opponent snapshot restores the missed stone');
+    assert.equal(H.ev(white, 'currentPlayer'), 2, 'White can now take its turn');
+    assert.equal(H.ev(black, 'focusedGameId'), recs[1].id, 'reply does not change opponent focus');
+    assert.equal(net.log.filter((m) => m.action === 'STATE_REQUEST' && m.gameId === rec.id).length, 1);
+    for (const [i, p] of peers.entries()) {
+        assert.equal(H.ev(p, `JSON.stringify(games.get(${JSON.stringify(recs[1].id)}).board)`), unrelatedBoards[i], 'sync does not change the concurrent board');
+    }
+    H.clickCell(white, 7, 8);
+    assert.equal(H.ev(white, 'board[7][8]'), 2);
+    assert.equal(H.ev(black, `games.get(${JSON.stringify(rec.id)}).board[7][8]`), 2);
+    assertNoErrors(peers);
+});
+
+test('tournament: sync requests are throttled and do not bypass an actual opponent turn', () => {
+    const { net, peers, byId } = boot(['Alice', 'Bob', 'Carol']);
+    H.setMode(peers[0], 'webxdc-tournament');
+    skipCountdown(peers);
+    const rec = JSON.parse(H.ev(peers[0], 'JSON.stringify(currentRoundRecords()[0])'));
+    const white = byId[rec.players[2]];
+    const before = net.log.length;
+    for (let i = 0; i < 5; i++) H.clickCell(white, 7, 8);
+    assert.equal(net.log.slice(before).filter((m) => m.action === 'STATE_REQUEST').length, 1);
+    assert.equal(net.log.slice(before).filter((m) => m.action === 'STATE').length, 1, 'only the targeted opponent replies');
+    for (const p of peers) {
+        assert.equal(H.ev(p, 'countMoves(board)'), 0);
+        assert.equal(H.ev(p, 'currentPlayer'), 1, 'Black still has the opening turn');
+    }
+    H.ev(white, 'lastGameStateRequest.at -= 5000');
+    H.clickCell(white, 7, 8);
+    assert.equal(net.log.slice(before).filter((m) => m.action === 'STATE_REQUEST').length, 2, 'requests can be retried after the cooldown');
+    assertNoErrors(peers);
+});
+
+test('tournament: state requests require a live seated device and never reply with older state', () => {
+    const { net, peers, byId } = boot(['Alice', 'Bob', 'Carol']);
+    H.setMode(peers[0], 'webxdc-tournament');
+    skipCountdown(peers);
+    const rec = JSON.parse(H.ev(peers[0], 'JSON.stringify(currentRoundRecords()[0])'));
+    const black = byId[rec.players[1]];
+    const white = byId[rec.players[2]];
+    const spectator = peers.find((p) => p !== black && p !== white);
+    const before = net.log.length;
+    H.ev(spectator, `sendXdcUpdate({
+        action: 'STATE_REQUEST', peerId: myPeerId, addr: myAddr, name: myName,
+        gameId: ${JSON.stringify(rec.id)}, targetPeerId: ${JSON.stringify(rec.players[1])}
+    })`);
+    H.ev(black, `handleIncomingPayload({
+        action: 'STATE_REQUEST', peerId: ${JSON.stringify(rec.players[2])},
+        addr: ${JSON.stringify(white.addr)}, gameId: ${JSON.stringify(rec.id)},
+        targetPeerId: myPeerId
+    }, { source: 'update', isLive: false })`);
+    H.ev(white, `sendXdcUpdate({
+        action: 'STATE_REQUEST', peerId: myPeerId, addr: myAddr, name: myName,
+        gameId: ${JSON.stringify(rec.id)}, targetPeerId: ${JSON.stringify(rec.players[1])},
+        moveCount: 1
+    })`);
+    H.ev(black, 'tournamentPlayerAddrLock.set(normalizeAddr(myAddr), "other-device")');
+    H.ev(white, `sendXdcUpdate({
+        action: 'STATE_REQUEST', peerId: myPeerId, addr: myAddr, name: myName,
+        gameId: ${JSON.stringify(rec.id)}, targetPeerId: ${JSON.stringify(rec.players[1])},
+        moveCount: 0
+    })`);
+    assert.equal(net.log.slice(before).filter((m) => m.action === 'STATE').length, 0);
+    assertNoErrors(peers);
+});
+
 test('tournament: a leaver forfeits its current match and later rounds walk over', async () => {
     const { peers, byId } = boot(['Alice', 'Bob', 'Carol', 'Dave']);
     H.setMode(peers[0], 'webxdc-tournament');

@@ -202,6 +202,26 @@ function getLocalAssignedPlayerNumber() {
     return null;
 }
 
+function requestFocusedGameState(reason) {
+    if (!window.webxdc || !focusedGameId) return;
+    const localSeat = getLocalAssignedPlayerNumber();
+    const targetPeerId = localSeat ? networkPlayers[localSeat === 1 ? 2 : 1] : null;
+    if (!targetPeerId) {
+        debugLog('STATE_REQUEST_SKIPPED', { reason: 'no-opponent', gameId: focusedGameId });
+        return;
+    }
+    const now = Date.now();
+    if (lastGameStateRequest?.gameId === focusedGameId && now - lastGameStateRequest.at < 5000) return;
+    lastGameStateRequest = { gameId: focusedGameId, at: now };
+    debugLog('STATE_REQUEST_SENT', { reason, gameId: focusedGameId, targetPeerId, moveCount: countMoves(board), currentPlayer });
+    showToast('Checking match state with your opponent. If the board updates, try your move again.', { variant: 'info', duration: 5000 });
+    sendXdcUpdate({
+        action: 'STATE_REQUEST',
+        peerId: myPeerId, addr: myAddr, name: myName,
+        gameId: focusedGameId, targetPeerId, moveCount: countMoves(board)
+    }, '', 'Gomoku match state requested');
+}
+
 function getResignSeatAssignment() {
     if (gameOver || historyReplayState) return null;
     const mode = gameModeSelect.value;
@@ -835,6 +855,32 @@ function handleIncomingPayload(payload, meta = {}) {
     }
 
     if (payload.action === 'JOIN' || payload.action === 'PRESENCE') return;
+
+    if (payload.action === 'STATE_REQUEST') {
+        if (!isLive || isSelfSender || !peerRepresentsLocalPlayer(payload.targetPeerId)) return;
+        const lockedPeerId = tournamentPlayerAddrLock.get(normalizeAddr(myAddr));
+        if (lockedPeerId && lockedPeerId !== myPeerId) {
+            debugLog('STATE_REQUEST_SKIPPED', { reason: 'addr-locked-to-other-device', gameId: payload.gameId });
+            return;
+        }
+        const rec = games.get(payload.gameId);
+        if (!rec || !localSeatInRecord(rec) || !peerIsGameParticipant(rec, senderPeerId)) {
+            debugLog('STATE_REQUEST_SKIPPED', { reason: 'not-match-participant', gameId: payload.gameId, senderPeerId });
+            return;
+        }
+        if (rec.mode !== 'webxdc-tournament' || !currentRoundRecords().some((r) => r.id === rec.id)) {
+            debugLog('STATE_REQUEST_SKIPPED', { reason: 'not-current-tournament-match', gameId: rec.id });
+            return;
+        }
+        const response = buildStatePayload(rec.id === focusedGameId ? null : rec);
+        if (Number.isInteger(payload.moveCount) && response.state.moveCount < payload.moveCount) {
+            debugLog('STATE_REQUEST_SKIPPED', { reason: 'requester-ahead', gameId: rec.id, senderPeerId });
+            return;
+        }
+        sendXdcUpdate(response, '', 'Gomoku match state response');
+        debugLog('STATE_REQUEST_RESPONDED', { gameId: rec.id, senderPeerId, moveCount: response.state.moveCount });
+        return;
+    }
 
     if (payload.action === 'CHALLENGE') {
         if (!isSelfSender) handleChallengePayload(payload, senderPeerId, senderAddr);
@@ -1560,8 +1606,8 @@ function announcePresence(action = 'JOIN') {
     sendXdcUpdate(update.payload, info, summary);
 }
 
-function buildStatePayload() {
-    return {
+function buildStatePayload(record = null) {
+    const payload = {
         action: 'STATE',
         addr: myAddr,
         name: myName,
@@ -1603,6 +1649,28 @@ function buildStatePayload() {
             }
         }
     };
+    if (record) {
+        payload.gameId = record.id;
+        // Seat scores belong to the focused board, not the background match.
+        delete payload.state.scores;
+        Object.assign(payload.state, {
+            board: record.board.map((row) => row.slice()),
+            currentPlayer: record.currentPlayer,
+            networkPlayers: { ...record.players },
+            networkPlayerAddrs: { ...record.playerAddrs },
+            p1Name: record.names[1],
+            p2Name: record.names[2],
+            gameOver: record.gameOver,
+            winnerPlayer: record.winnerPlayer,
+            moveCount: countMoves(record.board),
+            lastMove: record.lastMove ? { ...record.lastMove } : null,
+            turnDeadlineTs: record.turnDeadlineTs,
+            playerDeadlineTs: { 1: null, 2: null },
+            gameMode: record.mode,
+            gameStartAnnounced: !!record.players[1] && !!record.players[2]
+        });
+    }
+    return payload;
 }
 
 function applyStatePayload(payload, meta = {}) {

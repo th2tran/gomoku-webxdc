@@ -56,7 +56,7 @@ class Network {
     }
 }
 
-function makePeer(net, addr, name) {
+function makePeer(net, addr, name, storage = {}) {
     const peer = { addr, name, listener: null, errors: [], alerts: [], closed: false };
     const dom = new JSDOM(html, {
         runScripts: 'dangerously',
@@ -85,6 +85,9 @@ function makePeer(net, addr, name) {
     });
     peer.window = dom.window;
     peer.doc = dom.window.document;
+    for (const [key, value] of Object.entries(storage)) {
+        dom.window.localStorage.setItem(key, value);
+    }
     net.add(peer);
     livePeers.add(peer);
     // Inject the production classic-script order so top-level declarations share

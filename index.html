@@ -1164,6 +1164,18 @@
             margin: 4px 0;
             padding-left: 20px;
         }
+        .game-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 0;
+            cursor: pointer;
+        }
+        .game-option input {
+            width: 20px;
+            height: 20px;
+            accent-color: #f1c40f;
+        }
         .sgf-import-popup {
             display: none;
             position: fixed;
@@ -1447,6 +1459,7 @@
         <span class="panel-help">
             <button type="button" class="panel-help-btn" id="how-to-play-help-btn" aria-label="How to play" aria-expanded="false" aria-controls="how-to-play-popup"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M513.5-254.5Q528-269 528-290t-14.5-35.5Q499-340 478-340t-35.5 14.5Q428-311 428-290t14.5 35.5Q457-240 478-240t35.5-14.5ZM442-394h74q0-33 7.5-52t42.5-52q26-26 41-49.5t15-56.5q0-56-41-86t-97-30q-57 0-92.5 30T342-618l66 26q5-18 22.5-39t53.5-21q32 0 48 17.5t16 38.5q0 20-12 37.5T506-526q-44 39-54 59t-10 73Zm38 314q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z"/></svg></button>
         </span>
+        <button type="button" id="game-options-btn" aria-expanded="false" aria-controls="game-options-popup">Options</button>
     </h1>
 
     <div class="app-layout">
@@ -1615,6 +1628,19 @@
             </div>
         </div>
     </div>
+    <div class="how-to-play-popup" id="game-options-popup" aria-hidden="true">
+        <div class="how-to-play-panel" role="dialog" aria-modal="true" aria-labelledby="game-options-title" aria-describedby="game-options-description">
+            <div class="how-to-play-header">
+                <span id="game-options-title">Game Options</span>
+                <button id="game-options-close-btn" type="button">Close</button>
+            </div>
+            <div class="how-to-play-body">
+                <label class="game-option"><input id="game-sound-toggle" type="checkbox" checked> Game sound</label>
+                <label class="game-option"><input id="game-fireworks-toggle" type="checkbox" checked> Fireworks at the end of each game</label>
+                <p id="game-options-description">Changes apply immediately and are saved on this device only.</p>
+            </div>
+        </div>
+    </div>
     <div class="sgf-export-popup" id="sgf-export-popup" aria-hidden="true">
         <div class="sgf-export-panel" role="dialog" aria-modal="true" aria-labelledby="sgf-export-title">
             <div class="sgf-export-header">
@@ -1689,6 +1715,7 @@
     <script src="js/tournament.js"></script>
     <script src="js/replay.js"></script>
     <script src="js/ai-manager.js"></script>
+    <script src="js/options.js"></script>
     <script src="js/game.js"></script>
 </body>
 </html>

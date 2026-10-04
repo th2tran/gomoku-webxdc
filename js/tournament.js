@@ -144,6 +144,7 @@ function startTournamentRound(roundIndex, { announce = true } = {}) {
         }
     }
     stopMoveTimerInterval();
+    stopFireworks();
     turnDeadlineTs = null;
     // Each new round pairs up a fresh match — reset BOTH players' clocks to the
     // full time budget, not just the current player's. startMoveTimerForCurrentTurn

@@ -1094,9 +1094,7 @@
             turnIndicator.innerHTML = `⏰ <strong>${safeName(loserName)}</strong> ran out of time. <strong>${safeName(winnerName)}</strong> wins!`;
             turnIndicator.style.color = '#f1c40f';
             updateMoveTimerDisplay();
-            if (gameModeSelect.value !== 'webxdc-tournament') {
-                startFireworks();
-            }
+            startFireworks();
 
             addNotification(
                 `Game ended: ${loserName} ran out of time. ${winnerName} won.`,
@@ -1195,9 +1193,7 @@
             turnIndicator.innerHTML = `🚩 <strong>${safeName(loserName)}</strong> resigned. <strong>${safeName(winnerName)}</strong> wins!`;
             turnIndicator.style.color = '#f1c40f';
             updateMoveTimerDisplay();
-            if (gameModeSelect.value !== 'webxdc-tournament') {
-                startFireworks();
-            }
+            startFireworks();
 
             addNotification(
                 `Game ended: ${loserName} resigned. ${winnerName} won.`,
@@ -2228,9 +2224,8 @@
             if (gameModeSelect.value === 'webxdc-tournament') {
                 advanceTournamentMatch(winnerPeerId || networkPlayers[player] || null);
                 tournamentSingleRemainingConfirmation.pending = false;
-            } else {
-                startFireworks();
             }
+            startFireworks();
 
             if (isWebxdcNetworkMode() && window.webxdc && peerRepresentsLocalPlayer(networkPlayers[player])) {
                 sendXdcUpdate(
@@ -2518,6 +2513,9 @@
         let jubilationAudioContext = null;
 
         let gomokuAudioContext = null;
+        let gomokuAudioGain = null;
+        const gameOptions = loadGameOptions();
+        initializeGameOptions();
 
         // Window size/position persistence — restore saved size or maximize on first run
         (function applyWindowSizePreference() {

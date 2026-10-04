@@ -16,6 +16,7 @@ Gomoku WebXDC is a browser-based Gomoku (Five in a Row) game packaged as a WebXD
 - In-app chat panel for messaging peers, plus status updates for join/leave events
 - Scoreboard tracking by connected peer
 - Reset and synchronization helpers for multiplayer matches
+- Options panel with independent sound and end-of-game fireworks toggles
 
 ## How it works
 
@@ -75,6 +76,14 @@ Gomoku is a strategy board game played on a 15x15 grid. Players take turns placi
 - The move timer counts down for the current player in network and tournament matches; if time expires, the active player loses the match.
 - When a player leaves the game, the app announces it to the other connected players and may award the win to the remaining active player if they were in a live match.
 
+### Game options
+
+Click **Options** beside the title to turn game sound and end-of-game fireworks
+on or off independently. Both are enabled by default. Changes take effect
+immediately and are saved on your device without affecting other players.
+Disabling fireworks also stops any active celebration. Tournament matches
+celebrate individually, and fireworks stop when the next round begins.
+
 ## Build and packaging
 
 This repository includes a build script that packages the app into a WebXDC bundle with a versioned filename.
@@ -101,6 +110,7 @@ dist/gomoku-0.2.73.xdc
 - `js/tournament.js`: tournament scheduling and lifecycle.
 - `js/replay.js`: game history, SGF import/export, and replay.
 - `js/ai-manager.js`: computer-opponent selection and turn management.
+- `js/options.js`: local sound and fireworks preferences and the Options dialog.
 - `package.json`: build scripts and package metadata.
 - `js/sifu.js`: shared JavaScript AI engine for easy/medium play and the hard-mode fallback.
 - `js/worker.js`: thin worker entry point for the shared engine.

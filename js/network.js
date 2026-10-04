@@ -356,9 +356,7 @@ function applyWithdrawalResult(quitterPeerId, winnerPeerId, source = 'unknown') 
     turnIndicator.innerHTML = `🏳️ <strong>${safeName(winnerName)}</strong> wins by withdrawal`;
     turnIndicator.style.color = '#f1c40f';
     updateMoveTimerDisplay();
-    if (gameModeSelect.value !== 'webxdc-tournament') {
-        startFireworks();
-    }
+    startFireworks();
 
     const noteId = `withdrawal:${quitterPeerId || 'unknown'}:${winnerPeerId}:${countMoves(board)}`;
     const noteText = `${quitterName} withdrew. ${winnerName} wins the current game.`;

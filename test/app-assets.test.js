@@ -12,7 +12,7 @@ test('first-party scripts are valid JavaScript and subsystem scripts load before
     const scripts = Array.from(html.matchAll(/<script src="(js\/[^"]+)"><\/script>/g), (match) => match[1]);
     const bootstrapIndex = scripts.indexOf('js/game.js');
     assert.ok(bootstrapIndex >= 0);
-    for (const name of ['network', 'render', 'tournament', 'replay', 'ai-manager']) {
+    for (const name of ['network', 'render', 'tournament', 'replay', 'ai-manager', 'options']) {
         const index = scripts.indexOf(`js/${name}.js`);
         assert.ok(index >= 0 && index < bootstrapIndex, `${name} must load before game.js`);
     }

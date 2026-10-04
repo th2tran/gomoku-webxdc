@@ -335,7 +335,9 @@ function animateFireworks() {
     fireworkAnimationId = requestAnimationFrame(animateFireworks);
 }
 
-function startFireworks() { if (!fireworkAnimationId) animateFireworks(); }
+function startFireworks() {
+    if (gameOptions.fireworks && !fireworkAnimationId) animateFireworks();
+}
 
 function maybeStartTournamentFireworks() {
     if (gameModeSelect.value !== 'webxdc-tournament' || !tournamentState.finished) return;
@@ -363,10 +365,15 @@ function playTournamentJubilationSound() {
 }
 
 function getGomokuAudioContext() {
+    if (!gameOptions.sound) return null;
     try {
         const AudioCtor = window.AudioContext || window.webkitAudioContext;
         if (!AudioCtor) return null;
-        if (!gomokuAudioContext) gomokuAudioContext = new AudioCtor();
+        if (!gomokuAudioContext) {
+            gomokuAudioContext = new AudioCtor();
+            gomokuAudioGain = gomokuAudioContext.createGain();
+            gomokuAudioGain.connect(gomokuAudioContext.destination);
+        }
         if (gomokuAudioContext.state === 'suspended') {
             gomokuAudioContext.resume().catch(() => {});
         }
@@ -378,14 +385,14 @@ function getGomokuAudioContext() {
 }
 
 function playTone(context, frequency, durationSeconds, waveType = 'sine', volume = 0.06, startOffsetSeconds = 0) {
-    if (!context) return;
+    if (!context || !gameOptions.sound) return;
     const oscillator = context.createOscillator();
     const gain = context.createGain();
     oscillator.type = waveType;
     oscillator.frequency.value = frequency;
     gain.gain.value = 0.0001;
     oscillator.connect(gain);
-    gain.connect(context.destination);
+    gain.connect(gomokuAudioGain);
     const startAt = context.currentTime + startOffsetSeconds;
     oscillator.start(startAt);
     gain.gain.exponentialRampToValueAtTime(volume, startAt + 0.03);

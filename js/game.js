@@ -664,14 +664,14 @@
         }
 
         function debugLog(eventName, payload = {}) {
-            if (!DEBUG || debugLoggingPaused) return;
+            if (debugLoggingPaused) return;
             const timestamp = new Date().toISOString().split('T')[1].replace('Z', '');
             const line = `[${timestamp}] ${eventName} ${stringifyDebugValue(payload)}`;
             debugEntries.push(line);
             if (debugEntries.length > maxDebugEntries) debugEntries.shift();
             renderDebugLog();
 
-            console.log('[GomokuDebug]', eventName, payload);
+            if (DEBUG) console.log('[GomokuDebug]', eventName, payload);
         }
 
         const appLayoutEl = document.querySelector('.app-layout');

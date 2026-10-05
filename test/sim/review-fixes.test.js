@@ -132,11 +132,59 @@ test('realtime initialization is local, idempotent and leaves partially initiali
     assert.equal(joins, 2);
 });
 
-test('production debugLog is a no-op', () => {
+test('production debugLog populates the panel without console output', () => {
     const alice = H.makePeer(new H.Network(), 'alice@x', 'Alice');
     const logs = [];
     alice.window.console.log = (...args) => logs.push(args);
-    H.ev(alice, 'debugLog("SHOULD_NOT_LOG", { secret: "value" })');
-    assert.equal(H.ev(alice, 'debugEntries.length'), 0);
+    assert.match(H.$(alice, '#debug-log').textContent, /APP_BOOT/);
+    for (let i = 0; i < 7; i++) H.ev(alice, 'titleEl.click()');
+    assert.equal(H.$(alice, '#debug-popup').classList.contains('visible'), true);
+    assert.match(H.$(alice, '#debug-log').textContent, /DEBUG_PANEL_OPENED/);
+
+    H.ev(alice, 'debugLog("PANEL_EVENT", { detail: "value" })');
+    assert.match(H.$(alice, '#debug-log').textContent, /PANEL_EVENT {"detail":"value"}/);
+    assert.equal(H.$(alice, '#debug-search-count').textContent, String(H.ev(alice, 'debugEntries.length')));
     assert.deepEqual(logs, []);
+});
+
+test('debug panel pauses and resumes logging and retains entries while closed', () => {
+    const alice = H.makePeer(new H.Network(), 'alice@x', 'Alice');
+    H.ev(alice, 'showDebugPanel()');
+    const beforePause = H.$(alice, '#debug-log').textContent;
+    H.$(alice, '#debug-pause-btn').click();
+    assert.equal(H.$(alice, '#debug-pause-btn').textContent, 'Resume');
+    H.ev(alice, 'debugLog("PAUSED_EVENT")');
+    assert.equal(H.$(alice, '#debug-log').textContent, beforePause);
+
+    H.$(alice, '#debug-pause-btn').click();
+    H.ev(alice, 'debugLog("RESUMED_EVENT")');
+    assert.match(H.$(alice, '#debug-log').textContent, /RESUMED_EVENT/);
+    H.$(alice, '#debug-close-btn').click();
+    H.ev(alice, 'debugLog("CLOSED_PANEL_EVENT"); showDebugPanel()');
+    assert.match(H.$(alice, '#debug-log').textContent, /CLOSED_PANEL_EVENT/);
+    assert.doesNotMatch(H.$(alice, '#debug-log').textContent, /PAUSED_EVENT/);
+});
+
+test('debug panel bounds its buffer and filters newly arriving entries', () => {
+    const alice = H.makePeer(new H.Network(), 'alice@x', 'Alice');
+    H.ev(alice, 'for (let i = 0; i < 201; i++) debugLog("BUFFER_EVENT", { index: i })');
+    assert.equal(H.ev(alice, 'debugEntries.length'), 200);
+    assert.match(H.ev(alice, 'debugEntries[0]'), /"index":1}/);
+    assert.match(H.ev(alice, 'debugEntries[199]'), /"index":200}/);
+
+    const search = H.$(alice, '#debug-search-input');
+    search.value = 'matching_event';
+    search.dispatchEvent(new alice.window.Event('input', { bubbles: true }));
+    assert.equal(H.$(alice, '#debug-log').textContent, '');
+    H.ev(alice, 'debugLog("MATCHING_EVENT"); debugLog("OTHER_EVENT")');
+    assert.match(H.$(alice, '#debug-log').textContent, /MATCHING_EVENT/);
+    assert.doesNotMatch(H.$(alice, '#debug-log').textContent, /OTHER_EVENT/);
+    assert.equal(H.$(alice, '#debug-search-count').textContent, '1/200');
+
+    search.value = '';
+    search.dispatchEvent(new alice.window.Event('input', { bubbles: true }));
+    H.$(alice, '#debug-clear-btn').click();
+    assert.equal(H.ev(alice, 'debugEntries.length'), 1);
+    assert.match(H.$(alice, '#debug-log').textContent, /DEBUG_LOG_CLEARED/);
+    assert.equal(H.$(alice, '#debug-search-count').textContent, '1');
 });

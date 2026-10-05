@@ -128,8 +128,10 @@ dist/gomoku-0.2.73.xdc
 - The app uses ordered classic scripts without a bundler. Subsystem functions
   share the state owned by `game.js`; load the subsystem scripts before
   `game.js`, which initializes the application.
-- Debug logging is disabled in production by `const DEBUG = false` in
-  `js/game.js`. Set it to `true` in a development build to enable the debug panel's log.
+- The Debug Log panel keeps the latest 200 entries, including startup events.
+  Open it by tapping the title seven times within two seconds. Console debug
+  output is disabled by `const DEBUG = false` in `js/game.js`; set it to `true`
+  in a development build to also log to the console.
 - The bundled icon is a 512x512 PNG, kept below 1 MB.
 - Multiplayer behavior depends on the WebXDC host runtime and message delivery semantics, especially for realtime updates and presence detection.
 - Tournament mode is intended for connected users who want a full bracket-style match flow rather than a single direct match.

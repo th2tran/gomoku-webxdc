@@ -478,6 +478,7 @@
         const notificationIds = new Set();
         const notificationDedupeAtByKey = new Map();
         const maxNotifications = 200;
+        const localMessagesStorageKey = 'gomoku-messages-v1';
         const recentJoinAtByIdentity = new Map();
         let debugSearchQuery = '';
         let debugLoggingPaused = false;
@@ -798,6 +799,47 @@
             }, 900);
         }
 
+        function loadMessages() {
+            let saved;
+            try {
+                saved = JSON.parse(localStorage.getItem(localMessagesStorageKey));
+            } catch (err) {
+                console.warn('Gomoku: could not load message history', err);
+                return;
+            }
+            if (saved === null) return;
+            if (!Array.isArray(saved)) {
+                console.warn('Gomoku: invalid stored message history');
+                return;
+            }
+            const valid = saved.filter((entry) => entry
+                && typeof entry.id === 'string' && entry.id.trim()
+                && Number.isFinite(entry.at)
+                && typeof entry.text === 'string' && entry.text.trim()
+                && (entry.kind === 'chat' || entry.kind === 'system')
+                && (entry.sender == null || typeof entry.sender === 'string')
+                && (entry.senderPeerId == null || typeof entry.senderPeerId === 'string'));
+            if (valid.length !== saved.length) {
+                console.warn('Gomoku: ignored invalid stored messages');
+            }
+            for (const entry of valid.slice(-maxNotifications)) {
+                if (notificationIds.has(entry.id)) continue;
+                notificationIds.add(entry.id);
+                notifications.push({
+                    id: entry.id, at: entry.at, text: entry.text.trim(), kind: entry.kind,
+                    sender: entry.sender || null, senderPeerId: entry.senderPeerId || null
+                });
+            }
+        }
+
+        function saveMessages() {
+            try {
+                localStorage.setItem(localMessagesStorageKey, JSON.stringify(notifications.slice(-maxNotifications)));
+            } catch (err) {
+                console.warn('Gomoku: could not save message history', err);
+            }
+        }
+
         function addNotification(text, options = {}) {
             if (typeof text !== 'string' || !text.trim()) return;
             const noteText = text.trim();
@@ -904,11 +946,13 @@
         function hideNotificationsPanel() {
             notificationsMinimized = true;
             updateNotificationsPanelState();
+            saveMessages();
         }
 
         function toggleNotificationsPanel() {
             notificationsMinimized = !notificationsMinimized;
             updateNotificationsPanelState();
+            if (notificationsMinimized) saveMessages();
         }
 
         function maybeAnnounceGameStart(source = 'unknown') {
@@ -1415,6 +1459,8 @@
 
         // 'JOIN' announces us to the chat. 'PRESENCE' is the quiet reply an existing
         // player sends back to a newcomer, so discovery works in both directions.
+
+        loadMessages();
 
         // WebXDC Listener: Receives moves from chat
         if (window.webxdc) {
@@ -2371,6 +2417,7 @@
             notifications.length = 0;
             notificationIds.clear();
             renderNotifications();
+            saveMessages();
             debugLog('NOTIFICATIONS_CLEARED', {});
         });
         if (chatSendBtn) {
@@ -2562,6 +2609,7 @@
         let hiddenLeaveTimer = null;
         const triggerLocalLeave = (reason) => {
             if (reason === 'pagehide' || reason === 'beforeunload' || reason === 'unload') {
+                saveMessages();
                 clearTimeout(hiddenLeaveTimer);
                 broadcastLocalLeave(reason);
             }
@@ -2606,6 +2654,7 @@
         };
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'hidden') {
+                saveMessages();
                 // Start a grace timer — if heartbeats stop while the player doesn't return
                 // within the grace period, we assume the app was backgrounded-then-killed
                 // (common on mobile where pagehide / beforeunload never fire). Sending LEAVE

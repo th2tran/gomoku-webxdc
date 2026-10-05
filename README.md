@@ -13,7 +13,7 @@ Gomoku WebXDC is a browser-based Gomoku (Five in a Row) game packaged as a WebXD
 - Tournament mode with concurrent paired rounds and standings
 - "Games In Progress" panel to follow every active game and spectate any of them
 - Move timer for timed network turns
-- In-app chat panel for messaging peers, plus status updates for join/leave events
+- In-app Messages panel for messaging peers, plus status updates for join/leave events
 - Scoreboard tracking by connected peer
 - Reset and synchronization helpers for multiplayer matches
 - Options panel with independent sound and end-of-game fireworks toggles
@@ -85,6 +85,13 @@ on or off independently. Both are enabled by default. Changes take effect
 immediately and are saved on your device without affecting other players.
 Disabling fireworks also stops any active celebration. Tournament matches
 celebrate individually, and fireworks stop when the next round begins.
+
+### Messages
+
+The **Messages** panel keeps the latest 200 chat messages and status updates.
+History is saved locally when the panel is collapsed or the app is closed or
+backgrounded, and restored on startup. **Clear** also clears the saved history
+on this device; it does not clear other players' messages.
 
 ## Build and packaging
 

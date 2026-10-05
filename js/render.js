@@ -135,12 +135,12 @@ function updateNotificationsPanelState() {
     notificationsPopup.setAttribute('aria-hidden', shouldBeMinimized ? 'true' : 'false');
     if (notificationsToggleBtn) {
         notificationsToggleBtn.textContent = shouldBeMinimized ? '◀' : '▶';
-        notificationsToggleBtn.setAttribute('aria-label', shouldBeMinimized ? 'Expand chat' : 'Collapse chat');
+        notificationsToggleBtn.setAttribute('aria-label', shouldBeMinimized ? 'Expand messages' : 'Collapse messages');
     }
     if (notificationsTabBtn) {
         notificationsTabBtn.textContent = '◀';
         notificationsTabBtn.setAttribute('aria-hidden', shouldBeMinimized ? 'false' : 'true');
-        notificationsTabBtn.setAttribute('aria-label', shouldBeMinimized ? 'Expand chat' : 'Collapse chat');
+        notificationsTabBtn.setAttribute('aria-label', shouldBeMinimized ? 'Expand messages' : 'Collapse messages');
         notificationsTabBtn.style.display = shouldBeMinimized ? 'block' : 'none';
         notificationsTabBtn.style.top = `${notificationsTabTop}px`;
     }
@@ -157,7 +157,8 @@ function clampNotificationsTabTop(nextTop) {
 function formatNotificationTimestamp(ts) {
     if (!Number.isFinite(ts)) return '--:--:--';
     try {
-        return new Date(ts).toLocaleTimeString();
+        const date = new Date(ts);
+        return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
     } catch (_) {
         return '--:--:--';
     }

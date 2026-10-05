@@ -8,6 +8,9 @@
         let gameOver = false;
         let scores = { 1: 0, 2: 0 };
         let playerScoresByPeer = {};
+        const tournamentResults = new Map();
+        const legacyTournamentScores = new Map();
+        const retiredTournamentSeeds = new Set();
         let isComputerThinking = false;
         
         let networkPlayers = { 1: null, 2: null };
@@ -260,17 +263,7 @@
             if (payload.action === 'STATE') {
                 applyStateToRecord(rec, payload.state);
                 const st = payload.state || {};
-                // Scores are monotonic; max-merge avoids double counting across games.
-                if (st.playerScores && typeof st.playerScores === 'object') {
-                    let changed = false;
-                    for (const [pid, val] of Object.entries(st.playerScores)) {
-                        if (Number.isFinite(val) && val > (playerScoresByPeer[pid] || 0)) {
-                            playerScoresByPeer[pid] = val;
-                            changed = true;
-                        }
-                    }
-                    if (changed) updateAllPlayersScoreboard();
-                }
+                mergePlayerScores(st);
                 // Round catch-up: a peer ahead of us already started the next round.
                 if (tournamentRoundsActive() && st.tournamentState
                     && Number.isInteger(st.tournamentState.roundIndex)
@@ -1086,8 +1079,7 @@
                 scores[currentPlayer]++;
             }
             if (winnerPeerId && countForStandings) {
-                ensurePlayerScoreEntry(winnerPeerId);
-                playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
+                awardPlayerWin(winnerPeerId);
             }
             updateAllPlayersScoreboard();
 
@@ -1185,8 +1177,7 @@
                 scores[winnerPlayer]++;
             }
             if (winnerPeerId && countForStandings) {
-                ensurePlayerScoreEntry(winnerPeerId);
-                playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
+                awardPlayerWin(winnerPeerId);
             }
             updateAllPlayersScoreboard();
 
@@ -2187,8 +2178,7 @@
                 scores[player]++;
             }
             if (winnerPeerId && countForStandings) {
-                ensurePlayerScoreEntry(winnerPeerId);
-                playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
+                awardPlayerWin(winnerPeerId);
             }
             updateAllPlayersScoreboard();
             addNotification(

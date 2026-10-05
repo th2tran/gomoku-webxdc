@@ -349,8 +349,7 @@ function applyWithdrawalResult(quitterPeerId, winnerPeerId, source = 'unknown') 
     const countForStandings = gameModeSelect.value !== 'webxdc-tournament' || currentTournamentResultCounts();
     if (countForStandings) {
         scores[winnerPlayer]++;
-        ensurePlayerScoreEntry(winnerPeerId);
-        playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
+        awardPlayerWin(winnerPeerId);
     }
     updateAllPlayersScoreboard();
     turnIndicator.innerHTML = `🏳️ <strong>${safeName(winnerName)}</strong> wins by withdrawal`;
@@ -854,6 +853,12 @@ function handleIncomingPayload(payload, meta = {}) {
 
     if (payload.action === 'JOIN' || payload.action === 'PRESENCE') return;
 
+    if ((payload.action === 'TOURNAMENT_MODE' || (payload.action === 'RESET' && payload.tournamentReset))
+        && retiredTournamentSeeds.has(payload.seatSeed)) {
+        debugLog('UPDATE_SKIPPED', { reason: 'retired-tournament', action: payload.action, seatSeed: payload.seatSeed });
+        return;
+    }
+
     if (payload.action === 'STATE_REQUEST') {
         if (!isLive || isSelfSender || !peerRepresentsLocalPlayer(payload.targetPeerId)) return;
         const lockedPeerId = tournamentPlayerAddrLock.get(normalizeAddr(myAddr));
@@ -895,6 +900,10 @@ function handleIncomingPayload(payload, meta = {}) {
         || payload.action === 'RESET' || payload.action === 'TIMEOUT' || payload.action === 'WITHDRAWAL'
         || payload.action === 'RESIGN';
     if (isGameScopedAction) {
+        if (payload.action === 'STATE' && !stateMatchesCurrentTournament(payload.state)) {
+            debugLog('STATE_SKIPPED', { reason: 'different-tournament', gameId: payload.gameId });
+            return;
+        }
         const isTournamentWideReset = payload.action === 'RESET' && !!payload.tournamentReset;
         const targetGid = (typeof payload.gameId === 'string' && payload.gameId) ? payload.gameId : DEFAULT_GAME_ID;
         if (!isTournamentWideReset && targetGid !== (focusedGameId || DEFAULT_GAME_ID)) {
@@ -1110,23 +1119,15 @@ function rememberConnectedPlayer(peerId, name, addr = null, options = {}) {
         : null;
 
     if (sameAddrPeer && connectedPlayers[sameAddrPeer]) {
-        const staleScore = playerScoresByPeer[sameAddrPeer] || 0;
-        if (staleScore > 0) {
-            playerScoresByPeer[canonicalPeerId] = (playerScoresByPeer[canonicalPeerId] || 0) + staleScore;
-        }
+        migratePlayerScoreIdentity(sameAddrPeer, canonicalPeerId);
         if (networkPlayers[1] === sameAddrPeer) networkPlayers[1] = canonicalPeerId;
         if (networkPlayers[2] === sameAddrPeer) networkPlayers[2] = canonicalPeerId;
-        delete playerScoresByPeer[sameAddrPeer];
         delete connectedPlayers[sameAddrPeer];
     }
     if (peerId !== canonicalPeerId) {
-        const staleScore = playerScoresByPeer[peerId] || 0;
-        if (staleScore > 0) {
-            playerScoresByPeer[canonicalPeerId] = (playerScoresByPeer[canonicalPeerId] || 0) + staleScore;
-        }
+        migratePlayerScoreIdentity(peerId, canonicalPeerId);
         if (networkPlayers[1] === peerId) networkPlayers[1] = canonicalPeerId;
         if (networkPlayers[2] === peerId) networkPlayers[2] = canonicalPeerId;
-        delete playerScoresByPeer[peerId];
         if (connectedPlayers[peerId]) {
             delete connectedPlayers[peerId];
         }
@@ -1470,14 +1471,9 @@ function applyPeerListSync(payload, sourcePeerId = null, sourceAddr = null, meta
     for (const { oldPeerId, newPeerId, addr, name } of aliasReplacements) {
         if (oldPeerId === newPeerId) continue;
         if (connectedPlayers[oldPeerId]) {
-            const oldScore = playerScoresByPeer[oldPeerId] || 0;
-            const newScore = playerScoresByPeer[newPeerId] || 0;
-            if (oldScore > 0 || newScore > 0) {
-                playerScoresByPeer[newPeerId] = Math.max(newScore, oldScore);
-            }
+            migratePlayerScoreIdentity(oldPeerId, newPeerId);
             if (networkPlayers[1] === oldPeerId) networkPlayers[1] = newPeerId;
             if (networkPlayers[2] === oldPeerId) networkPlayers[2] = newPeerId;
-            delete playerScoresByPeer[oldPeerId];
             delete connectedPlayers[oldPeerId];
             joinNotificationKeys.delete(`peer:${oldPeerId}`);
             if (addr) joinNotificationKeys.delete(`addr:${normalizeAddr(addr)}`);
@@ -1623,6 +1619,16 @@ function buildStatePayload(record = null) {
             p2Name: p2NameInput.value,
             scores: { 1: scores[1], 2: scores[2] },
             playerScores: { ...playerScoresByPeer },
+            playerScoreAddrs: Object.fromEntries(
+                [...new Set([...Object.keys(playerScoresByPeer), ...legacyTournamentScores.keys()])]
+                    .map((peerId) => [peerId, getAddrForPeer(peerId)])
+            ),
+            tournamentResults: gameModeSelect.value === 'webxdc-tournament'
+                ? Array.from(tournamentResults.values(), (result) => ({ ...result }))
+                : undefined,
+            legacyTournamentScores: gameModeSelect.value === 'webxdc-tournament'
+                ? Object.fromEntries(legacyTournamentScores)
+                : undefined,
             notifications: notifications.map((entry) => ({ id: entry.id, at: entry.at, text: entry.text, kind: entry.kind, sender: entry.sender, senderPeerId: entry.senderPeerId })),
             gameStartAnnounced,
             gameOver,
@@ -1673,10 +1679,24 @@ function buildStatePayload(record = null) {
 
 function applyStatePayload(payload, meta = {}) {
     const state = payload?.state;
+    if (!stateMatchesCurrentTournament(state)) {
+        debugLog('STATE_SKIPPED', { reason: 'different-tournament', source: meta.source || 'unknown' });
+        return;
+    }
     if (!state || !Array.isArray(state.board) || state.board.length !== boardSize) {
         debugLog('STATE_SKIPPED', { reason: 'invalid-board-shape', source: meta.source || 'unknown' });
         return;
     }
+    if (state.gameMode === 'webxdc-tournament' && gameModeSelect.value !== 'webxdc-tournament'
+        && state.tournamentState?.seatSeed !== tournamentState.seatSeed) {
+        if (tournamentState.seatSeed) retiredTournamentSeeds.add(tournamentState.seatSeed);
+        playerScoresByPeer = {};
+        tournamentResults.clear();
+        legacyTournamentScores.clear();
+    }
+    // Match results are independent of board freshness. An older board can still
+    // carry a completed match that this peer has never received.
+    mergePlayerScores(state);
 
     const normalizedBoard = state.board.map((row) =>
         Array.isArray(row) && row.length === boardSize
@@ -1830,17 +1850,6 @@ function applyStatePayload(payload, meta = {}) {
     if (Number.isInteger(state.scores?.[1]) && Number.isInteger(state.scores?.[2])) {
         scores[1] = state.scores[1];
         scores[2] = state.scores[2];
-    }
-    if (state.playerScores && typeof state.playerScores === 'object') {
-        const nextScores = {};
-        for (const [peerId, rawValue] of Object.entries(state.playerScores)) {
-            if (!peerId) continue;
-            const scoreValue = Number.isInteger(rawValue) ? rawValue : 0;
-            const peerAddr = connectedPlayers[peerId]?.addr || null;
-            const canonicalId = getCanonicalPeerId(peerId, peerAddr) || peerId;
-            nextScores[canonicalId] = Math.max(nextScores[canonicalId] || 0, scoreValue);
-        }
-        playerScoresByPeer = nextScores;
     }
     if (Array.isArray(state.notifications)) {
         for (const note of state.notifications) {

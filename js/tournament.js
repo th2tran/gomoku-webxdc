@@ -1,5 +1,110 @@
 // Classic-script functions share game.js globals; load this before js/game.js.
 
+function migratePlayerScoreIdentity(oldPeerId, newPeerId) {
+    playerScoresByPeer[newPeerId] = Math.max(playerScoresByPeer[newPeerId] || 0, playerScoresByPeer[oldPeerId] || 0);
+    delete playerScoresByPeer[oldPeerId];
+    if (legacyTournamentScores.has(oldPeerId)) {
+        legacyTournamentScores.set(newPeerId, Math.max(legacyTournamentScores.get(newPeerId) || 0, legacyTournamentScores.get(oldPeerId)));
+        legacyTournamentScores.delete(oldPeerId);
+    }
+    for (const result of tournamentResults.values()) {
+        if (result.winnerPeerId === oldPeerId) result.winnerPeerId = newPeerId;
+    }
+}
+
+function rebuildTournamentScores() {
+    const totals = new Map();
+    for (const result of tournamentResults.values()) {
+        const peerId = getCanonicalPeerId(result.winnerPeerId, result.winnerAddr) || result.winnerPeerId;
+        totals.set(peerId, (totals.get(peerId) || 0) + 1);
+    }
+    for (const [peerId, wins] of legacyTournamentScores) {
+        const canonicalId = getCanonicalPeerId(peerId, getAddrForPeer(peerId)) || peerId;
+        totals.set(canonicalId, Math.max(totals.get(canonicalId) || 0, wins));
+    }
+    for (const peerId of Object.keys(playerScoresByPeer)) playerScoresByPeer[peerId] = 0;
+    for (const [peerId, wins] of totals) {
+        if (!knownLeftPeers.has(peerId)) playerScoresByPeer[peerId] = wins;
+    }
+}
+
+function awardPlayerWin(winnerPeerId, gameId = focusedGameId) {
+    if (gameModeSelect.value !== 'webxdc-tournament') {
+        ensurePlayerScoreEntry(winnerPeerId);
+        playerScoresByPeer[winnerPeerId]++;
+        return;
+    }
+    if (!gameId || !tournamentState.seatSeed) {
+        debugLog('TOURNAMENT_RESULT_SKIPPED', { reason: 'missing-match-identity', gameId });
+        return;
+    }
+    if (!tournamentResults.has(gameId)) {
+        tournamentResults.set(gameId, {
+            gameId, winnerPeerId, winnerAddr: getAddrForPeer(winnerPeerId),
+            tournamentSeed: tournamentState.seatSeed
+        });
+    }
+    rebuildTournamentScores();
+}
+
+function stateMatchesCurrentTournament(state) {
+    if (retiredTournamentSeeds.has(state?.tournamentState?.seatSeed)) return false;
+    if (gameModeSelect.value !== 'webxdc-tournament' || !tournamentState.seatSeed) return true;
+    return state?.gameMode === 'webxdc-tournament'
+        && state.tournamentState?.seatSeed === tournamentState.seatSeed;
+}
+
+function mergePlayerScores(state) {
+    if (!stateMatchesCurrentTournament(state)) {
+        debugLog('SCORES_SKIPPED', { reason: 'different-tournament' });
+        return;
+    }
+    const isTournament = state.gameMode === 'webxdc-tournament';
+    if (isTournament && Array.isArray(state.tournamentResults)) {
+        for (const result of state.tournamentResults) {
+            if (!result || typeof result.gameId !== 'string' || !result.gameId
+                || typeof result.winnerPeerId !== 'string' || !result.winnerPeerId
+                || result.tournamentSeed !== state.tournamentState?.seatSeed) {
+                debugLog('TOURNAMENT_RESULT_SKIPPED', { reason: 'invalid-result' });
+                continue;
+            }
+            const existing = tournamentResults.get(result.gameId);
+            if (existing && getCanonicalPeerId(existing.winnerPeerId, existing.winnerAddr)
+                !== getCanonicalPeerId(result.winnerPeerId, result.winnerAddr)) {
+                debugLog('TOURNAMENT_RESULT_SKIPPED', { reason: 'conflicting-result', gameId: result.gameId });
+                continue;
+            }
+            if (!existing) tournamentResults.set(result.gameId, {
+                gameId: result.gameId,
+                winnerPeerId: result.winnerPeerId,
+                winnerAddr: normalizeAddr(result.winnerAddr),
+                tournamentSeed: result.tournamentSeed
+            });
+        }
+    }
+    const incomingScores = isTournament && Array.isArray(state.tournamentResults)
+        ? state.legacyTournamentScores
+        : state.playerScores;
+    if (incomingScores && typeof incomingScores === 'object') {
+        // Older clients only send counters. Treat them as monotonic lower bounds,
+        // not increments: their snapshot can overlap results already in the ledger.
+        for (const [peerId, wins] of Object.entries(incomingScores)) {
+            if (!peerId || !Number.isSafeInteger(wins) || wins < 0) {
+                debugLog('SCORES_SKIPPED', { reason: 'invalid-score', peerId });
+                continue;
+            }
+            const canonicalId = getCanonicalPeerId(peerId, state.playerScoreAddrs?.[peerId] || getAddrForPeer(peerId)) || peerId;
+            if (isTournament) {
+                legacyTournamentScores.set(canonicalId, Math.max(legacyTournamentScores.get(canonicalId) || 0, wins));
+            } else {
+                playerScoresByPeer[canonicalId] = Math.max(playerScoresByPeer[canonicalId] || 0, wins);
+            }
+        }
+    }
+    if (isTournament) rebuildTournamentScores();
+    updateAllPlayersScoreboard();
+}
+
 function tournamentRoundsActive() {
     return gameModeSelect.value === 'webxdc-tournament'
         && Array.isArray(tournamentState.rounds) && tournamentState.rounds.length > 0;
@@ -579,8 +684,7 @@ function maybeFinalizeTournamentForSingleRemainingPlayer() {
         clearInterval(tournamentState.clockTimer);
         tournamentState.clockTimer = null;
     }
-    ensurePlayerScoreEntry(winnerPeerId);
-    playerScoresByPeer[winnerPeerId] = (playerScoresByPeer[winnerPeerId] || 0) + 1;
+    awardPlayerWin(winnerPeerId, `default:${tournamentState.seatSeed}`);
     const winnerName = displayNameForPeer(winnerPeerId);
     turnIndicator.innerHTML = `🏆 Tournament Winner: <strong>${safeName(winnerName)}</strong>`;
     turnIndicator.style.color = '#f1c40f';
@@ -709,6 +813,11 @@ function advanceTournamentMatch(winnerPeerId) {
 }
 
 function resetTournamentProgress(seatSeed = createSeatSeed(), deadlineTs = Date.now() + tournamentDurationMs) {
+    if (retiredTournamentSeeds.has(seatSeed)) {
+        debugLog('TOURNAMENT_RESET_SKIPPED', { reason: 'retired-tournament', seatSeed });
+        return;
+    }
+    if (tournamentState.seatSeed && tournamentState.seatSeed !== seatSeed) retiredTournamentSeeds.add(tournamentState.seatSeed);
     tournamentState.enabled = true;
     tournamentState.finished = false;
     tournamentState.schedule = buildTournamentSchedule();
@@ -738,6 +847,8 @@ function resetTournamentProgress(seatSeed = createSeatSeed(), deadlineTs = Date.
     myAssignedPlayer = null;
     tournamentPlayerAddrLock.clear();
     playerScoresByPeer = {};
+    tournamentResults.clear();
+    legacyTournamentScores.clear();
     scores[1] = 0;
     scores[2] = 0;
     gameStartAnnounced = false;
@@ -800,6 +911,7 @@ function startTournamentCountdown() {
 }
 
 function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0, schedule = null, countdownDeadlineTs = null, deadlineTs = null, seatSeed = null, cycle = 0, matchNumber = 1, broadcast = true } = {}) {
+    const tournamentScoreSeed = tournamentState.seatSeed;
     const nextSchedule = Array.isArray(schedule) ? schedule : buildTournamentSchedule();
     const nextPairIndex = Number.isInteger(pairIndex) ? pairIndex : 0;
     const shouldPreserveTournamentClock = tournamentState.enabled && !tournamentState.finished
@@ -817,6 +929,11 @@ function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0
             ? tournamentState.deadlineTs
             : Date.now() + tournamentDurationMs;
     const nextSeatSeed = typeof seatSeed === 'string' && seatSeed ? seatSeed : createSeatSeed();
+    if (retiredTournamentSeeds.has(nextSeatSeed)) {
+        debugLog('TOURNAMENT_MODE_SKIPPED', { reason: 'retired-tournament', seatSeed: nextSeatSeed });
+        return;
+    }
+    if (tournamentScoreSeed && tournamentScoreSeed !== nextSeatSeed) retiredTournamentSeeds.add(tournamentScoreSeed);
 
     gameModeSelect.value = 'webxdc-tournament';
     p1NameInput.disabled = true;
@@ -845,9 +962,13 @@ function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0
     for (const peerId of Object.keys(connectedPlayers)) {
         if (connectedPlayers[peerId]) connectedPlayers[peerId].lastSeen = nowTs;
     }
-    playerScoresByPeer = {};
-    scores[1] = 0;
-    scores[2] = 0;
+    if (tournamentScoreSeed !== nextSeatSeed) {
+        playerScoresByPeer = {};
+        tournamentResults.clear();
+        legacyTournamentScores.clear();
+        scores[1] = 0;
+        scores[2] = 0;
+    }
     networkPlayers = { 1: null, 2: null };
     myAssignedPlayer = null;
     // Concurrent rounds: derive disjoint pairings from the shared schedule and

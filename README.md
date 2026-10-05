@@ -57,6 +57,8 @@ Tournament mode creates a round-robin schedule among connected peers and splits 
 - standings and win counts
 - final tournament rankings
 
+Tournament standings are synchronized as a union of match results, each counted once by its game ID. Delayed snapshots cannot remove newer wins, and snapshots from other tournaments are rejected. New tournaments clear the result ledger. Older clients' score-only snapshots are merged as monotonic lower bounds; all peers should use the updated version for complete match-result synchronization.
+
 ## How to play
 
 Gomoku is a strategy board game played on a 15x15 grid. Players take turns placing stones, and the goal is to create an unbroken line of five stones in any direction: horizontally, vertically, or diagonally.

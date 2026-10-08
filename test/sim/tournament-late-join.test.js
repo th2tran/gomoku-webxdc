@@ -50,6 +50,247 @@ function startTournamentThenLateJoin() {
     return { net, alice, bob, carol, byId, match };
 }
 
+function watchMatch(peer, gameId) {
+    const records = JSON.parse(H.ev(peer, 'JSON.stringify(activeGamesForDisplay().map((r) => r.id))'));
+    const item = H.$$(peer, '.game-in-progress-item')[records.indexOf(gameId)];
+    assert.ok(item, 'match is available in Games In Progress');
+    item.click();
+    assert.equal(H.ev(peer, 'focusedGameId'), gameId);
+}
+
+function assertObserver(peer) {
+    assert.equal(H.ev(peer, 'gameModeSelect.value'), 'webxdc');
+    assert.equal(H.ev(peer, 'tournamentState.enabled'), false);
+    assert.equal(H.ev(peer, 'tournamentState.pendingEntrants.length'), 0);
+    assert.equal(H.ev(peer, 'tournamentResults.size'), 0);
+    assert.equal(H.ev(peer, 'localSeatInRecord(games.get(focusedGameId))'), null);
+    assert.equal(H.ev(peer, 'getLocalAssignedPlayerNumber()'), null);
+    assert.equal(H.ev(peer, 'shouldRunMoveTimer()'), false);
+    assert.equal(H.ev(peer, 'moveTimerInterval'), null);
+    assert.equal(H.ev(peer, 'Object.values(playerScoresByPeer).every((score) => score === 0)'), true);
+    assert.equal(H.ev(peer, 'scores[1] + scores[2]'), 0);
+}
+
+test('tournament observer: late 2-player peer watches live moves and a win without participating', () => {
+    const { net, alice, bob, carol, byId, match } = startTournamentThenLateJoin();
+    assert.equal(H.ev(carol, `games.get(${JSON.stringify(match.id)}).moveCount`), 3,
+        'late observer receives the already-played board');
+    assert.equal(H.ev(carol, 'focusedGameId'), 'g:legacy-default');
+    assert.match(H.panelText(carol), /Tournament.*Round 1.*3 moves/);
+    const logStart = net.log.length;
+    watchMatch(carol, match.id);
+    assert.equal(H.ev(carol, 'board[3][3]'), 1);
+    assert.equal(H.ev(carol, 'isSpectatingFocusedGame()'), true);
+    assert.equal(H.$(carol, '#board').classList.contains('spectating'), true);
+    assert.match(H.$(carol, '#current-match-meta').textContent, /Tournament Round 1.*Spectating/);
+    assert.equal(H.$(carol, '#reset-btn').disabled, true);
+    assert.equal(H.$(carol, '#resign-btn').disabled, true);
+    H.clickCell(carol, 8, 8);
+    H.$(carol, '#reset-btn').dispatchEvent(new carol.window.MouseEvent('click', { bubbles: true }));
+    H.$(carol, '#resign-btn').click();
+    assert.equal(H.ev(carol, 'board[8][8]'), 0);
+    assert.equal(H.ev(carol, 'countMoves(board)'), 3);
+    H.ev(carol, "broadcastStateSync('observer')");
+
+    const black = byId[match.players[1]];
+    const white = byId[match.players[2]];
+    for (const c of [4, 5, 6]) {
+        H.clickCell(white, 4, c);
+        H.clickCell(black, 3, c + 1);
+        assert.equal(H.ev(carol, `board[3][${c + 1}]`), 1, 'focused observer updates live');
+    }
+    assert.equal(H.ev(carol, 'gameOver'), true);
+    assert.match(H.panelText(carol), /won.*Finished/);
+    assertObserver(carol);
+    for (const p of [alice, bob]) assert.equal(H.ev(p, 'tournamentState.pendingEntrants.length'), 0);
+    assert.ok(!net.log.slice(logStart).some((e) => e.from === carol.addr
+        && ['MOVE', 'STATE', 'RESET', 'RESIGN', 'TIMEOUT', 'TOURNAMENT_MODE', 'TOURNAMENT_JOIN'].includes(e.action)),
+        'observer emits no game or tournament mutations');
+    assertNoErrors([alice, bob, carol]);
+});
+
+test('tournament observer: a resignation finishes the watched game without changing observer scores', () => {
+    const { alice, bob, carol, byId, match } = startTournamentThenLateJoin();
+    watchMatch(carol, match.id);
+    H.ev(byId[match.players[1]], 'resignCurrentGame()');
+    assert.equal(H.ev(carol, 'gameOver'), true);
+    assert.equal(H.ev(carol, 'games.get(focusedGameId).winnerPlayer'), 2);
+    assertObserver(carol);
+    assertNoErrors([alice, bob, carol]);
+});
+
+test('tournament observer: timeout results remain read-only', () => {
+    const { alice, bob, carol, byId, match } = startTournamentThenLateJoin();
+    watchMatch(carol, match.id);
+    H.ev(byId[match.players[1]], `sendXdcUpdate({
+        action: 'TIMEOUT', gameId: ${JSON.stringify(match.id)},
+        loserPlayer: 1, winnerPlayer: 2, peerId: myPeerId, addr: myAddr, name: myName
+    }, '', '')`);
+    assert.equal(H.ev(carol, 'gameOver'), true);
+    assert.equal(H.ev(carol, 'games.get(focusedGameId).winnerPlayer'), 2);
+    assertObserver(carol);
+    assertNoErrors([alice, bob, carol]);
+});
+
+test('tournament observer: finalization closes all watched matches without inventing a winner', () => {
+    const { alice, bob, carol, match } = startTournamentThenLateJoin();
+    watchMatch(carol, match.id);
+    H.ev(alice, 'finalizeTournament()');
+    assert.equal(H.ev(carol, 'gameOver'), true);
+    assert.equal(H.ev(carol, 'games.get(focusedGameId).winnerPlayer'), null);
+    assert.equal(H.ev(carol, 'hasObservedActiveTournament()'), false);
+    assertObserver(carol);
+    assertNoErrors([alice, bob, carol]);
+});
+
+test('tournament observer: delayed boards cannot remove moves or reopen a completed match', () => {
+    const { alice, bob, carol, byId, match } = startTournamentThenLateJoin();
+    watchMatch(carol, match.id);
+    const stale = JSON.parse(H.ev(alice, 'JSON.stringify(buildStatePayload())'));
+    H.clickCell(byId[match.players[2]], 4, 4);
+    H.ev(carol, `handleIncomingPayload(${JSON.stringify(stale)}, { isLive: false })`);
+    assert.equal(H.ev(carol, 'countMoves(board)'), 4);
+    H.ev(byId[match.players[1]], 'resignCurrentGame()');
+    H.ev(carol, `handleIncomingPayload(${JSON.stringify(stale)}, { isLive: false })`);
+    assert.equal(H.ev(carol, 'gameOver'), true);
+    assert.equal(H.ev(carol, 'games.get(focusedGameId).winnerPlayer'), 2);
+    assertObserver(carol);
+    assertNoErrors([alice, bob, carol]);
+});
+
+test('tournament observer: automatic round-robin advance never pairs or switches the watcher', async () => {
+    const { alice, bob, carol, byId, match } = startTournamentThenLateJoin();
+    watchMatch(carol, match.id);
+    const black = byId[match.players[1]];
+    const white = byId[match.players[2]];
+    for (const c of [4, 5, 6]) {
+        H.clickCell(white, 4, c);
+        H.clickCell(black, 3, c + 1);
+    }
+    await waitUntil([alice, bob], 'tournamentState.cycle === 1');
+    const [next] = currentRound(alice);
+    assert.notEqual(next.id, match.id);
+    assert.equal(H.ev(carol, 'focusedGameId'), match.id);
+    assert.deepEqual(JSON.parse(H.ev(carol, 'JSON.stringify(activeGamesForDisplay().filter((r) => r.mode === "webxdc-tournament").map((r) => r.id))')), [next.id]);
+    watchMatch(carol, next.id);
+    assert.equal(H.ev(carol, 'countMoves(board)'), 0);
+    assertObserver(carol);
+    for (const p of [alice, bob]) assert.equal(H.ev(p, 'tournamentPeersFromSchedule(tournamentState.schedule).length'), 2);
+    assertNoErrors([alice, bob, carol]);
+});
+
+test('tournament observer: player withdrawal does not award a normal 2-player win', () => {
+    const { alice, bob, carol, byId, match } = startTournamentThenLateJoin();
+    watchMatch(carol, match.id);
+    H.ev(byId[match.players[1]], `sendXdcUpdate({
+        action: 'LEAVE', leftPeerId: myPeerId, winnerPeerId: ${JSON.stringify(match.players[2])},
+        peerId: myPeerId, addr: myAddr, name: myName
+    }, '', '')`);
+    assert.equal(H.ev(carol, 'gameOver'), true);
+    assert.equal(H.ev(carol, 'games.get(focusedGameId).winnerPlayer'), 2);
+    assertObserver(carol);
+    assertNoErrors([alice, bob, carol]);
+});
+
+test('tournament observer: withdrawal also finishes an unfocused match', () => {
+    const { alice, bob, carol, byId, match } = startTournamentThenLateJoin();
+    H.ev(byId[match.players[1]], `sendXdcUpdate({
+        action: 'LEAVE', leftPeerId: myPeerId,
+        peerId: myPeerId, addr: myAddr, name: myName
+    }, '', '')`);
+    assert.equal(H.ev(carol, `games.get(${JSON.stringify(match.id)}).gameOver`), true);
+    watchMatch(carol, match.id);
+    assert.equal(H.ev(carol, 'gameOver'), true);
+    assert.equal(H.ev(carol, 'games.get(focusedGameId).winnerPlayer'), 2);
+    assertObserver(carol);
+    assertNoErrors([alice, bob, carol]);
+});
+
+test('tournament observer: new tournaments replace old listings and reject delayed old moves and states', () => {
+    const { alice, bob, carol, match } = startTournamentThenLateJoin();
+    watchMatch(carol, match.id);
+    const stale = JSON.parse(H.ev(alice, 'JSON.stringify(buildStatePayload())'));
+    H.ev(alice, `beginTournamentMode({
+        schedule: tournamentState.schedule, seatSeed: createSeatSeed(), fromRemote: false, broadcast: true
+    })`);
+    const [next] = currentRound(alice);
+    assert.notEqual(next.id, match.id);
+    assert.equal(H.ev(carol, 'focusedGameId'), match.id);
+    assert.deepEqual(JSON.parse(H.ev(carol, 'JSON.stringify(activeGamesForDisplay().filter((r) => r.mode === "webxdc-tournament").map((r) => r.id))')), [next.id]);
+    H.ev(carol, `handleIncomingPayload(${JSON.stringify(stale)}, { isLive: false })`);
+    H.ev(carol, `handleIncomingPayload({
+        action: 'MOVE', gameId: ${JSON.stringify(match.id)}, r: 8, c: 8, player: 1,
+        peerId: ${JSON.stringify(match.players[1])}
+    }, { isLive: false })`);
+    assert.equal(H.ev(carol, 'board[8][8]'), 0);
+    H.ev(alice, 'finalizeTournament()');
+    assert.deepEqual(JSON.parse(H.ev(carol, 'JSON.stringify(activeGamesForDisplay().filter((r) => r.mode === "webxdc-tournament").map((r) => r.id))')), [next.id],
+        'finishing the new tournament does not bring old tournaments back');
+    assertNoErrors([alice, bob, carol]);
+});
+
+test('tournament observer: concurrent matches are visible before moves and only the latest round is listed', () => {
+    const net = new H.Network();
+    const players = ['Alice', 'Bob', 'Carol', 'Dave'].map((name) => H.makePeer(net, `${name}@x`, name));
+    H.setMode(players[0], 'webxdc-tournament');
+    skipCountdown(players);
+    const observer = H.makePeer(net, 'eve@x', 'Eve');
+    const matches = currentRound(players[0]);
+    assert.equal(matches.length, 2);
+    assert.equal(H.ev(observer, 'activeGamesForDisplay().filter((r) => r.mode === "webxdc-tournament").length'), 2);
+    watchMatch(observer, matches[0].id);
+    watchMatch(observer, matches[1].id);
+    const oldFocused = H.ev(observer, 'focusedGameId');
+    const staleState = JSON.parse(H.ev(players[0], 'JSON.stringify(buildStatePayload())'));
+    for (const p of players) H.ev(p, "startTournamentRound(1); broadcastStateSync('observer-round-test')");
+    assert.equal(H.ev(observer, 'focusedGameId'), oldFocused, 'round changes do not take over observer focus');
+    assert.equal(H.ev(observer, 'activeGamesForDisplay().filter((r) => r.mode === "webxdc-tournament").length'), 2);
+    assert.equal(H.ev(observer, 'activeGamesForDisplay().filter((r) => r.mode === "webxdc-tournament").every((r) => r.round === 1)'), true);
+    H.ev(observer, `handleIncomingPayload(${JSON.stringify(staleState)}, { isLive: false })`);
+    assert.equal(H.ev(observer, 'activeGamesForDisplay().filter((r) => r.mode === "webxdc-tournament").every((r) => r.round === 1)'), true,
+        'delayed snapshots do not restore an old round');
+    assertObserver(observer);
+    assertNoErrors([...players, observer]);
+});
+
+test('tournament observer: switching local modes never resets a watched tournament match', () => {
+    const { net, alice, bob, carol, match } = startTournamentThenLateJoin();
+    watchMatch(carol, match.id);
+    const logStart = net.log.length;
+    H.setMode(carol, 'pvp');
+    H.setMode(carol, 'webxdc');
+    assert.equal(H.ev(carol, 'focusedGameId'), 'g:legacy-default');
+    assert.equal(H.ev(carol, `games.get(${JSON.stringify(match.id)}).moveCount`), 3);
+    assert.ok(!net.log.slice(logStart).some((e) => e.from === carol.addr
+        && e.gameId === match.id && e.action === 'RESET'));
+    for (const p of [alice, bob]) assert.equal(H.ev(p, 'countMoves(board)'), 3);
+    assertNoErrors([alice, bob, carol]);
+});
+
+test('tournament observer: own 2-player game remains independent and playable', () => {
+    const { net, alice, bob, carol, match } = startTournamentThenLateJoin();
+    const dave = H.makePeer(net, 'dave@x', 'Dave');
+    watchMatch(carol, match.id);
+    H.ev(carol, `challengePeer(${JSON.stringify(H.ev(dave, 'myPeerId'))}, 'Dave')`);
+    H.$(dave, '#toast-stack .toast').click();
+    const gameId = H.ev(carol, 'focusedGameId');
+    assert.notEqual(gameId, match.id);
+    watchMatch(carol, match.id);
+    const first = H.ev(dave, 'getLocalAssignedPlayerNumber()') === 1 ? dave : carol;
+    if (first === carol) H.ev(carol, `focusGame(${JSON.stringify(gameId)})`);
+    H.clickCell(first, 7, 7);
+    assert.equal(H.ev(carol, `games.get(${JSON.stringify(gameId)}).moveCount`), 1);
+    assert.equal(H.ev(carol, `games.get(${JSON.stringify(match.id)}).moveCount`), 3);
+    H.ev(carol, `focusGame(${JSON.stringify(gameId)})`);
+    assert.equal(H.ev(carol, 'isSpectatingFocusedGame()'), false);
+    assert.equal(H.$(carol, '#reset-btn').disabled, false);
+    const second = first === carol ? dave : carol;
+    H.clickCell(second, 7, 8);
+    assert.equal(H.ev(carol, 'board[7][8]'), 2);
+    assert.equal(H.ev(dave, 'board[7][8]'), 2);
+    assertNoErrors([alice, bob, carol, dave]);
+});
+
 test('late join: 2-player peer is not auto-switched by tournament progress broadcasts', () => {
     const { alice, bob, carol, byId, match } = startTournamentThenLateJoin();
     const black = byId[match.players[1]];
@@ -62,8 +303,9 @@ test('late join: 2-player peer is not auto-switched by tournament progress broad
 
     assert.equal(H.$(carol, '#game-mode').value, 'webxdc', 'Carol stays in Network (2 players) mode');
     assert.equal(H.ev(carol, 'tournamentState.enabled'), false);
-    assert.equal(H.ev(carol, 'Array.from(games.values()).some((r) => r.mode === "webxdc-tournament")'), false,
-        'tournament matches are not tracked by a non-tournament peer');
+    assert.equal(H.ev(carol, 'Array.from(games.values()).some((r) => r.mode === "webxdc-tournament")'), true,
+        'tournament matches are tracked for read-only spectating');
+    assert.equal(H.ev(carol, 'focusedGameId'), 'g:legacy-default', 'watching is opt-in');
     assert.equal(H.ev(carol, 'hasObservedActiveTournament()'), true, 'Carol remembers there is a tournament to join');
     assertNoErrors([alice, bob, carol]);
 });

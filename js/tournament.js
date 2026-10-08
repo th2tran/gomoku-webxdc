@@ -391,6 +391,12 @@ function updateCurrentMatchDisplay() {
         return;
     }
     if (gameModeSelect.value === 'webxdc') {
+        const rec = games.get(focusedGameId);
+        if (rec?.mode === 'webxdc-tournament') {
+            const round = Number.isInteger(rec.round) ? ` Round ${rec.round + 1}` : '';
+            currentMatchMetaEl.textContent = `Tournament${round} · Spectating`;
+            return;
+        }
         currentMatchMetaEl.textContent = 'Current Match: Network 2-Player';
         return;
     }
@@ -1153,6 +1159,8 @@ function broadcastTournamentMode() {
 const TOURNAMENT_JOIN_QUERY_TIMEOUT_MS = 2000;
 const tournamentJoinRequest = { requestId: null, timer: null };
 let observedActiveTournament = null;
+const observedTournamentRounds = new Map();
+let observedTournamentQuerySeed = null;
 
 function cancelTournamentJoinRequest() {
     if (tournamentJoinRequest.timer) clearTimeout(tournamentJoinRequest.timer);
@@ -1173,6 +1181,15 @@ function noteObservedTournament(payload) {
     const info = payload?.action === 'STATE' ? payload.state?.tournamentState : payload;
     const seatSeed = info?.seatSeed;
     if (typeof seatSeed !== 'string' || !seatSeed || retiredTournamentSeeds.has(seatSeed)) return;
+    const previous = observedTournamentRounds.get(seatSeed);
+    const cycle = Number.isInteger(info.cycle) ? info.cycle : previous?.cycle || 0;
+    const roundIndex = Number.isInteger(info.roundIndex) ? info.roundIndex : previous?.roundIndex || 0;
+    if (previous && (previous.finished || cycle < previous.cycle
+        || (cycle === previous.cycle && roundIndex < previous.roundIndex))) return;
+    if (observedActiveTournament && observedActiveTournament.seatSeed !== seatSeed) {
+        retiredTournamentSeeds.add(observedActiveTournament.seatSeed);
+    }
+    observedTournamentRounds.set(seatSeed, { cycle, roundIndex, finished: !!info.finished });
     if (info.finished) {
         if (observedActiveTournament?.seatSeed === seatSeed) observedActiveTournament = null;
         return;
@@ -1182,6 +1199,76 @@ function noteObservedTournament(payload) {
         deadlineTs: Number.isFinite(info.deadlineTs) ? info.deadlineTs : null,
         seenAt: Date.now()
     };
+}
+
+function handleObservedTournamentPayload(payload, ctx) {
+    const gid = payload.gameId;
+    if (typeof gid !== 'string' || !gid.startsWith('t:')) return;
+    if (payload.action === 'RESET' && payload.tournamentReset) return;
+    if (!['STATE', 'MOVE', 'RESET', 'TIMEOUT', 'RESIGN', 'WITHDRAWAL'].includes(payload.action)) return;
+    const match = /^t:(.+):c(\d+):r(\d+):/.exec(gid);
+    if (match && retiredTournamentSeeds.has(match[1])) return;
+    let applyGameState = true;
+    if (payload.action === 'STATE') {
+        const state = payload.state;
+        if (!stateMatchesCurrentTournament(state)) return;
+        if (!Array.isArray(state?.board) || state.board.length !== boardSize
+            || state.board.some((row) => !Array.isArray(row) || row.length !== boardSize
+                || row.some((cell) => cell !== 0 && cell !== 1 && cell !== 2))) {
+            debugLog('STATE_SKIPPED', { reason: 'invalid-observed-board', gameId: gid });
+            return;
+        }
+        const rec = games.get(gid);
+        if (rec && (countMoves(state.board) < rec.moveCount || (rec.gameOver && !state.gameOver))) {
+            debugLog('STATE_SKIPPED', { reason: 'older-than-observed', gameId: gid });
+            applyGameState = false;
+        }
+    }
+    if (applyGameState) {
+        if (!games.has(gid) && match) {
+            const rec = createGameRecord(gid, { mode: 'webxdc-tournament', round: Number(match[3]) });
+            rec.tournamentSeed = match[1];
+            rec.cycle = Number(match[2]);
+        }
+        handleBackgroundGamePayload(gid, payload, { ...ctx, readOnly: true });
+    }
+    const info = payload.state?.tournamentState;
+    if (info?.finished) {
+        for (const rec of games.values()) {
+            if (rec.mode === 'webxdc-tournament' && rec.tournamentSeed === info.seatSeed) {
+                rec.gameOver = true;
+                rec.turnDeadlineTs = null;
+            }
+        }
+        const focused = games.get(focusedGameId);
+        if (focused?.tournamentSeed === info.seatSeed) hydrateFocusedGame(focused);
+        updateGamesInProgressPanel();
+    }
+}
+
+function finishObservedTournamentGamesForLeaver(peerId) {
+    for (const rec of games.values()) {
+        if (rec.mode !== 'webxdc-tournament' || rec.gameOver) continue;
+        const seat = rec.players[1] === peerId ? 1 : rec.players[2] === peerId ? 2 : null;
+        if (!seat) continue;
+        handleBackgroundGamePayload(rec.id, {
+            action: 'WITHDRAWAL', quitterPeerId: peerId,
+            winnerPeerId: rec.players[seat === 1 ? 2 : 1]
+        }, { readOnly: true });
+    }
+}
+
+function requestObservedTournamentGames() {
+    if (!window.webxdc || !hasObservedActiveTournament()
+        || observedTournamentQuerySeed === observedActiveTournament.seatSeed) return;
+    observedTournamentQuerySeed = observedActiveTournament.seatSeed;
+    sendXdcUpdate({
+        action: 'TOURNAMENT_QUERY',
+        spectateOnly: true,
+        peerId: myPeerId,
+        name: myName,
+        addr: myAddr
+    }, '', 'Tournament spectator state query');
 }
 
 function rememberActiveLocalTournament() {
@@ -1247,6 +1334,13 @@ function respondToTournamentQuery(payload, senderPeerId) {
     if (gameModeSelect.value !== 'webxdc-tournament' || !tournamentState.enabled
         || tournamentState.finished || !tournamentState.seatSeed) return;
     if (isTournamentClockExpired(Date.now())) return;
+    if (payload.spectateOnly === true) {
+        snapshotFocusedGame();
+        for (const rec of currentRoundRecords()) {
+            if (localSeatInRecord(rec)) sendXdcUpdate(buildStatePayload(rec), '', 'Tournament spectator state');
+        }
+        return;
+    }
     sendXdcUpdate({
         action: 'TOURNAMENT_INFO',
         requestId: payload.requestId,

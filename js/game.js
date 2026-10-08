@@ -83,6 +83,7 @@
 
         function localSeatInRecord(record) {
             if (!record) return null;
+            if (record.mode === 'webxdc-tournament' && gameModeSelect.value !== 'webxdc-tournament') return null;
             if (peerRepresentsLocalPlayer(record.players[1])) return 1;
             if (peerRepresentsLocalPlayer(record.players[2])) return 2;
             return null;
@@ -137,7 +138,7 @@
             rec.playerAddrs = { 1: getAddrForPeer(networkPlayers[1]), 2: getAddrForPeer(networkPlayers[2]) };
             rec.names = { 1: p1NameInput.value, 2: p2NameInput.value };
             rec.gameOver = gameOver;
-            rec.winnerPlayer = gameOver ? currentPlayer : null;
+            if (!isObservingTournamentGame()) rec.winnerPlayer = gameOver ? currentPlayer : null;
             rec.moveCount = countMoves(board);
             rec.lastMove = lastPlacedMove ? { r: lastPlacedMove.r, c: lastPlacedMove.c, player: lastPlacedMove.player } : null;
             rec.turnDeadlineTs = turnDeadlineTs;
@@ -186,6 +187,7 @@
             snapshotFocusedGame();
             hydrateFocusedGame(rec);
             updateSpectatorBanner();
+            updateModeSelectState();
             updateGamesInProgressPanel();
             if (options.toast) {
                 showToast(options.toast, { variant: options.toastVariant || 'info' });
@@ -200,6 +202,11 @@
             // An empty lobby board (no seated players) is idle, not spectating.
             if (!rec.players[1] && !rec.players[2]) return false;
             return localSeatInRecord(rec) === null;
+        }
+
+        function isObservingTournamentGame() {
+            return gameModeSelect.value !== 'webxdc-tournament'
+                && games.get(focusedGameId)?.mode === 'webxdc-tournament';
         }
 
         // ---- Headless apply for non-focused (background) games ----
@@ -239,6 +246,11 @@
             if (state.lastMove) rec.lastMove = { r: state.lastMove.r, c: state.lastMove.c, player: state.lastMove.player };
             if (Number.isFinite(state.turnDeadlineTs) || state.turnDeadlineTs === null) rec.turnDeadlineTs = state.turnDeadlineTs;
             if (Number.isInteger(state.round)) rec.round = state.round;
+            if (state.gameMode === 'webxdc-tournament' && state.tournamentState) {
+                rec.tournamentSeed = state.tournamentState.seatSeed;
+                rec.round = state.tournamentState.roundIndex;
+                rec.cycle = state.tournamentState.cycle || 0;
+            }
             rec.updatedAt = Date.now();
         }
 
@@ -257,13 +269,13 @@
             let rec = games.get(gid);
             if (!rec) {
                 rec = createGameRecord(gid, {
-                    mode: payload.gameMode || payload.state?.gameMode || (payload.tournamentReset ? 'webxdc-tournament' : 'webxdc')
+                    mode: payload.gameMode || payload.state?.gameMode || (isTournamentScopedPayload(payload) ? 'webxdc-tournament' : 'webxdc')
                 });
             }
             if (payload.action === 'STATE') {
                 applyStateToRecord(rec, payload.state);
                 const st = payload.state || {};
-                mergePlayerScores(st);
+                if (!ctx.readOnly) mergePlayerScores(st);
                 if (tournamentRoundsActive() && st.tournamentState?.seatSeed === tournamentState.seatSeed) {
                     addTournamentEntrants(st.tournamentState.entrants);
                 }
@@ -311,16 +323,29 @@
             } else if (payload.action === 'TIMEOUT') {
                 rec.gameOver = true;
                 rec.winnerPlayer = payload.winnerPlayer === 2 ? 2 : 1;
+                rec.currentPlayer = rec.winnerPlayer;
+                rec.turnDeadlineTs = null;
                 rec.updatedAt = Date.now();
             } else if (payload.action === 'RESIGN') {
                 rec.gameOver = true;
                 rec.winnerPlayer = payload.winnerPlayer === 2 ? 2 : 1;
+                rec.currentPlayer = rec.winnerPlayer;
+                rec.turnDeadlineTs = null;
                 rec.updatedAt = Date.now();
             } else if (payload.action === 'WITHDRAWAL') {
                 rec.gameOver = true;
+                rec.winnerPlayer = rec.players[1] === payload.winnerPeerId ? 1
+                    : rec.players[2] === payload.winnerPeerId ? 2 : null;
+                if (rec.winnerPlayer) rec.currentPlayer = rec.winnerPlayer;
+                rec.turnDeadlineTs = null;
                 rec.updatedAt = Date.now();
             }
+            if (ctx.readOnly && rec.id === focusedGameId) {
+                hydrateFocusedGame(rec);
+                updateSpectatorBanner();
+            }
             updateGamesInProgressPanel();
+            if (ctx.readOnly) return;
             maybeAutoSwitchToMyGame(rec);
             if (rec.gameOver) maybeAdvanceTournamentRound();
         }
@@ -1048,6 +1073,7 @@
 
         function shouldRunMoveTimer() {
             if (gameOver || !Array.isArray(board) || board.length !== boardSize) return false;
+            if (isObservingTournamentGame()) return false;
             if (gameModeSelect.value === 'pvp') return false;
             if (gameModeSelect.value === 'pve') return false;
             if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return true;
@@ -1706,7 +1732,7 @@
                     gameModeSelect.value = 'webxdc';
                 }
             }
-            resetBtn.disabled = tournamentInProgress;
+            resetBtn.disabled = tournamentInProgress || isObservingTournamentGame();
             updateDifficultyControlVisibility();
             updateConnectedPeersPanel();
         }
@@ -1786,6 +1812,11 @@
         });
 
         function initBoard(sendNetworkUpdate = false, options = {}) {
+            if (isObservingTournamentGame()) {
+                snapshotFocusedGame();
+                if (!games.has(DEFAULT_GAME_ID)) createGameRecord(DEFAULT_GAME_ID);
+                focusedGameId = DEFAULT_GAME_ID;
+            }
             stopReplay();
             boardElement.innerHTML = '';
             board = Array(boardSize).fill(null).map(() => Array(boardSize).fill(0));
@@ -1960,7 +1991,8 @@
                 // seated into via a challenge. The idle default board and spectated games
                 // are read-only.
                 if (gameModeSelect.value === 'webxdc') {
-                    const iHaveSeat = peerRepresentsLocalPlayer(networkPlayers[1]) || peerRepresentsLocalPlayer(networkPlayers[2]);
+                    const iHaveSeat = !isObservingTournamentGame()
+                        && (peerRepresentsLocalPlayer(networkPlayers[1]) || peerRepresentsLocalPlayer(networkPlayers[2]));
                     if (!iHaveSeat) {
                         if (isSpectatingFocusedGame()) {
                             showToast('You are spectating this game.', { variant: 'info', duration: 2500 });
@@ -2295,6 +2327,8 @@
 
         function updateTurnIndicator() {
             updateResignButtonState();
+            resetBtn.disabled = isObservingTournamentGame()
+                || (gameModeSelect.value === 'webxdc-tournament' && tournamentState.enabled && !tournamentState.finished);
             const name = currentPlayer === 1 ? p1NameInput.value : p2NameInput.value;
             const color = currentPlayer === 1 ? '(Black)' : '(White)';
             const activePeerId = networkPlayers[currentPlayer] || null;
@@ -2356,6 +2390,10 @@
         p1NameInput.addEventListener('input', updateTurnIndicator);
         p2NameInput.addEventListener('input', updateTurnIndicator);
         resetBtn.addEventListener('click', () => {
+            if (isObservingTournamentGame()) {
+                showToast('You are spectating this game.', { variant: 'info', duration: 2500 });
+                return;
+            }
             if (gameModeSelect.value === 'webxdc-tournament') {
                 const startTournamentReset = () => {
                     const freshSeatSeed = createSeatSeed();

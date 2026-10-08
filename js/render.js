@@ -17,10 +17,18 @@ function activeGamesForDisplay() {
     const list = [];
     const roundsActive = tournamentRoundsActive();
     for (const rec of games.values()) {
+        if (!isNetworkMode() && rec.mode === 'webxdc-tournament') continue;
         if (rec.id === DEFAULT_GAME_ID && rec.moveCount === 0 && !rec.players[1] && !rec.players[2]) continue;
         // During a round-based tournament only the current round's matches are relevant.
         if (roundsActive && rec.mode === 'webxdc-tournament'
             && (rec.round !== tournamentState.roundIndex || (rec.cycle || 0) !== (tournamentState.cycle || 0))) continue;
+        if (!roundsActive && rec.mode === 'webxdc-tournament') {
+            if (retiredTournamentSeeds.has(rec.tournamentSeed)) continue;
+            const observedSeed = observedActiveTournament?.seatSeed || observedTournamentQuerySeed;
+            if (observedSeed && rec.tournamentSeed && rec.tournamentSeed !== observedSeed) continue;
+            const observed = observedTournamentRounds.get(rec.tournamentSeed);
+            if (observed && (rec.round !== observed.roundIndex || (rec.cycle || 0) !== observed.cycle)) continue;
+        }
         list.push(rec);
     }
     list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -62,7 +70,8 @@ function updateGamesInProgressPanel() {
             ? (rec.winnerPlayer ? `${panelSeatName(rec, rec.winnerPlayer, '')} won` : 'Finished')
             : `${panelSeatName(rec, rec.currentPlayer, '')}'s turn`;
         const roundText = Number.isInteger(rec.round) ? `Round ${rec.round + 1} · ` : '';
-        meta.textContent = `${roundText}${rec.moveCount} moves · ${turnName}`;
+        const tournamentText = rec.mode === 'webxdc-tournament' ? 'Tournament · ' : '';
+        meta.textContent = `${tournamentText}${roundText}${rec.moveCount} moves · ${turnName}`;
         item.appendChild(meta);
 
         const badge = document.createElement('span');

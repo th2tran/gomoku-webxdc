@@ -190,12 +190,17 @@ function peerRepresentsLocalPlayer(peerId) {
 }
 
 function syncMyAssignedPlayer() {
+    if (isObservingTournamentGame()) {
+        myAssignedPlayer = null;
+        return;
+    }
     myAssignedPlayer = peerRepresentsLocalPlayer(networkPlayers[1]) ? 1
         : peerRepresentsLocalPlayer(networkPlayers[2]) ? 2
         : null;
 }
 
 function getLocalAssignedPlayerNumber() {
+    if (isObservingTournamentGame()) return null;
     if (peerRepresentsLocalPlayer(networkPlayers[1])) return 1;
     if (peerRepresentsLocalPlayer(networkPlayers[2])) return 2;
     if (myAssignedPlayer === 1 || myAssignedPlayer === 2) return myAssignedPlayer;
@@ -292,7 +297,7 @@ function applyPeerLeft(peerId, source = 'unknown', leaveEventId = null, noteText
         (!!networkPlayers[1] && normalizeAddr(getAddrForPeer(networkPlayers[1])) === normalizeAddr(leaverAddr))
         || (!!networkPlayers[2] && normalizeAddr(getAddrForPeer(networkPlayers[2])) === normalizeAddr(leaverAddr))
     );
-    if (!(tournamentMatchActive && (wasActivePlayer || wasActiveByAddr))) {
+    if (!isObservingTournamentGame() && !(tournamentMatchActive && (wasActivePlayer || wasActiveByAddr))) {
         if (networkPlayers[1] === peerId) networkPlayers[1] = null;
         if (networkPlayers[2] === peerId) networkPlayers[2] = null;
     }
@@ -326,6 +331,13 @@ function applyPeerLeft(peerId, source = 'unknown', leaveEventId = null, noteText
 
 function applyWithdrawalResult(quitterPeerId, winnerPeerId, source = 'unknown') {
     if (!winnerPeerId || gameOver) return;
+    if (isObservingTournamentGame()) {
+        handleBackgroundGamePayload(focusedGameId, {
+            action: 'WITHDRAWAL', quitterPeerId, winnerPeerId
+        }, { readOnly: true });
+        if (quitterPeerId) applyPeerLeft(quitterPeerId, source);
+        return;
+    }
     if (quitterPeerId) {
         const quitterName = displayNameForPeer(quitterPeerId);
         applyPeerLeft(
@@ -390,6 +402,7 @@ function startPlayerExitMonitor() {
     if (playerExitMonitorTimer) return;
     playerExitMonitorTimer = setInterval(() => {
         if (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') return;
+        if (isObservingTournamentGame()) return;
         maybeHandleTournamentExpiry();
         const now = Date.now();
 
@@ -815,6 +828,9 @@ function handleIncomingPayload(payload, meta = {}) {
             || (typeof payload.leftPeerId === 'string' ? payload.leftPeerId : null)
             || senderPeerId;
         const leaveWinnerPeerId = typeof payload.winnerPeerId === 'string' ? payload.winnerPeerId : null;
+        if (canonicalLeftPeerId && gameModeSelect.value === 'webxdc') {
+            finishObservedTournamentGamesForLeaver(canonicalLeftPeerId);
+        }
         const leavingPeerIsCurrentGameParticipant = !!canonicalLeftPeerId && [networkPlayers[1], networkPlayers[2]].some((peerId) => {
             if (!peerId) return false;
             return getCanonicalPeerId(peerId, connectedPlayers[peerId]?.addr || null) === canonicalLeftPeerId;
@@ -858,6 +874,7 @@ function handleIncomingPayload(payload, meta = {}) {
     if (payload.action === 'JOIN' || payload.action === 'PRESENCE') {
         if (!isSelfSender && payload.tournament && gameModeSelect.value !== 'webxdc-tournament') {
             noteObservedTournament(payload.tournament);
+            if (gameModeSelect.value === 'webxdc') requestObservedTournamentGames();
         }
         return;
     }
@@ -875,14 +892,14 @@ function handleIncomingPayload(payload, meta = {}) {
         return;
     }
 
-    // Peers outside tournament mode never get pulled into a tournament by its progress
-    // traffic; they only remember it so switching modes can join it. The one exception
-    // is a fresh TOURNAMENT_MODE start whose roster includes this peer.
+    // Tournament observers update match records without running participant lifecycle code.
     if (gameModeSelect.value !== 'webxdc-tournament' && isTournamentScopedPayload(payload)) {
         noteObservedTournament(payload);
         const isRosterStart = payload.action === 'TOURNAMENT_MODE' && scheduleIncludesLocalPlayer(payload.schedule);
         if (!isRosterStart) {
-            debugLog('TOURNAMENT_PAYLOAD_IGNORED', { reason: 'not-in-tournament-mode', action: payload.action, gameId: payload.gameId || null });
+            if (gameModeSelect.value === 'webxdc') {
+                handleObservedTournamentPayload(payload, { senderPeerId, senderName, senderAddr, isLive });
+            }
             return;
         }
     }
@@ -1951,6 +1968,7 @@ function applyStatePayload(payload, meta = {}) {
 
 function broadcastStateSync(reason) {
     if (!window.webxdc || (gameModeSelect.value !== 'webxdc' && gameModeSelect.value !== 'webxdc-tournament') || !board?.length) return;
+    if (isObservingTournamentGame()) return;
     const payload = buildStatePayload();
     sendXdcUpdate(payload, '', `Gomoku state sync (${reason})`);
     debugLog('STATE_SYNC_SENT', { reason, moveCount: payload.state.moveCount });

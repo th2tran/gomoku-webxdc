@@ -1,6 +1,6 @@
 {
   "name": "gomoku-webxdc",
-  "version": "0.10.0+262",
+  "version": "0.10.0+263",
   "description": "Gomoku game packaged for WebXDC",
   "main": "index.html",
   "scripts": {

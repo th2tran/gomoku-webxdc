@@ -320,18 +320,22 @@ function maybeAdvanceTournamentRound() {
     }
     const nextIndex = tournamentState.roundIndex + 1;
     const completedCycle = nextIndex >= tournamentState.rounds.length;
+    const scheduledCycle = tournamentState.cycle || 0;
+    const scheduledMatchNumber = tournamentState.matchNumber || 1;
     tournamentState.roundAdvanceTimer = setTimeout(() => {
         tournamentState.roundAdvanceTimer = null;
         if (gameModeSelect.value !== 'webxdc-tournament' || tournamentState.finished) return;
         if (isTournamentClockExpired(Date.now()) || tournamentLiveRoundPeerCount() < 2) { finalizeTournament(); return; }
         if (completedCycle) {
-            tournamentState.cycle = (tournamentState.cycle || 0) + 1;
+            // A STATE from a faster peer may already have bumped the cycle; never double-advance.
+            tournamentState.cycle = Math.max(tournamentState.cycle || 0, scheduledCycle + 1);
+            mergeTournamentEntrantsIntoSchedule();
             stopFireworks();
             addNotification(`Round-robin completed. Starting round-robin #${tournamentState.cycle + 1} before tournament time runs out.`, {
                 id: `tournament-round-robin:${tournamentState.cycle}`, at: Date.now(), broadcast: false
             });
         }
-        tournamentState.matchNumber = (tournamentState.matchNumber || 1) + 1;
+        tournamentState.matchNumber = Math.max(tournamentState.matchNumber || 1, scheduledMatchNumber + 1);
         tournamentState.matchGraceUntilTs = Date.now() + 12000;
         startTournamentRound(completedCycle ? 0 : nextIndex);
         if (window.webxdc) broadcastStateSync('tournament-next-round');
@@ -891,6 +895,7 @@ function resetTournamentProgress(seatSeed = createSeatSeed(), deadlineTs = null,
     }
     tournamentState.rounds = [];
     tournamentState.roundIndex = 0;
+    tournamentState.pendingEntrants = [];
     if (tournamentState.countdownTimer) {
         clearInterval(tournamentState.countdownTimer);
         tournamentState.countdownTimer = null;
@@ -967,7 +972,8 @@ function startTournamentCountdown() {
     updateModeSelectState();
 }
 
-function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0, schedule = null, countdownDeadlineTs = null, deadlineTs = null, remainingMs = null, tournamentLengthMinutes = null, seatSeed = null, cycle = 0, matchNumber = 1, broadcast = true } = {}) {
+function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0, schedule = null, countdownDeadlineTs = null, deadlineTs = null, remainingMs = null, tournamentLengthMinutes = null, seatSeed = null, cycle = 0, matchNumber = 1, broadcast = true, skipCountdown = false } = {}) {
+    cancelTournamentJoinRequest();
     const tournamentScoreSeed = tournamentState.seatSeed;
     const nextSchedule = Array.isArray(schedule) ? schedule : buildTournamentSchedule();
     const nextPairIndex = Number.isInteger(pairIndex) ? pairIndex : 0;
@@ -975,7 +981,9 @@ function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0
         && Number.isFinite(tournamentState.deadlineTs);
     const explicitCountdownDeadlineTs = Number.isFinite(countdownDeadlineTs);
     const explicitDeadlineTs = Number.isFinite(deadlineTs);
-    const nextCountdownDeadlineTs = explicitCountdownDeadlineTs
+    const nextCountdownDeadlineTs = skipCountdown
+        ? null
+        : explicitCountdownDeadlineTs
         ? countdownDeadlineTs
         : shouldPreserveTournamentClock
             ? tournamentState.countdownDeadlineTs
@@ -1043,6 +1051,7 @@ function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0
     // Concurrent rounds: derive disjoint pairings from the shared schedule and
     // start the requested round (all matches in the round run simultaneously).
     tournamentState.departed = new Set();
+    tournamentState.pendingEntrants = [];
     tournamentState.rounds = buildTournamentRounds(tournamentPeersFromSchedule(nextSchedule));
     if (tournamentState.roundAdvanceTimer) {
         clearTimeout(tournamentState.roundAdvanceTimer);
@@ -1075,7 +1084,17 @@ function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0
             debugLog('TOURNAMENT_PLAYER_READDED', { assignedPeerId, cachedAddr, reason: 'stale-eviction-recovery' });
         }
     }
-    startTournamentCountdown();
+    if (skipCountdown) {
+        if (tournamentState.countdownTimer) {
+            clearInterval(tournamentState.countdownTimer);
+            tournamentState.countdownTimer = null;
+        }
+        updateMoveTimerDisplay();
+        updateTournamentMatchDisplay();
+        updateModeSelectState();
+    } else {
+        startTournamentCountdown();
+    }
     startTournamentClockMonitor();
     updateTurnIndicator();
     updateAllPlayersScoreboard();
@@ -1126,4 +1145,243 @@ function broadcastTournamentMode() {
         matchNumber: tournamentState.matchNumber,
         broadcast: true
     });
+}
+
+// ---- Joining a tournament that is already in progress ----
+// Switching to tournament mode while other peers are mid-tournament must join that
+// tournament instead of broadcasting TOURNAMENT_MODE (which would restart it for all).
+const TOURNAMENT_JOIN_QUERY_TIMEOUT_MS = 2000;
+const tournamentJoinRequest = { requestId: null, timer: null };
+let observedActiveTournament = null;
+
+function cancelTournamentJoinRequest() {
+    if (tournamentJoinRequest.timer) clearTimeout(tournamentJoinRequest.timer);
+    tournamentJoinRequest.timer = null;
+    tournamentJoinRequest.requestId = null;
+}
+
+function isTournamentScopedPayload(payload) {
+    if (!payload) return false;
+    if (payload.action === 'TOURNAMENT_MODE') return true;
+    if (payload.action === 'RESET' && payload.tournamentReset) return true;
+    if (payload.action === 'STATE' && (payload.state?.gameMode === 'webxdc-tournament'
+        || payload.state?.tournamentState?.enabled || payload.state?.tournamentState?.finished)) return true;
+    return typeof payload.gameId === 'string' && payload.gameId.startsWith('t:');
+}
+
+function noteObservedTournament(payload) {
+    const info = payload?.action === 'STATE' ? payload.state?.tournamentState : payload;
+    const seatSeed = info?.seatSeed;
+    if (typeof seatSeed !== 'string' || !seatSeed || retiredTournamentSeeds.has(seatSeed)) return;
+    if (info.finished) {
+        if (observedActiveTournament?.seatSeed === seatSeed) observedActiveTournament = null;
+        return;
+    }
+    observedActiveTournament = {
+        seatSeed,
+        deadlineTs: Number.isFinite(info.deadlineTs) ? info.deadlineTs : null,
+        seenAt: Date.now()
+    };
+}
+
+function rememberActiveLocalTournament() {
+    if (!tournamentState.enabled || tournamentState.finished || !tournamentState.seatSeed) return;
+    observedActiveTournament = {
+        seatSeed: tournamentState.seatSeed,
+        deadlineTs: Number.isFinite(tournamentState.deadlineTs) ? tournamentState.deadlineTs : null,
+        seenAt: Date.now()
+    };
+}
+
+function hasObservedActiveTournament() {
+    const observed = observedActiveTournament;
+    if (!observed || retiredTournamentSeeds.has(observed.seatSeed)) return false;
+    return !Number.isFinite(observed.deadlineTs) || observed.deadlineTs > Date.now();
+}
+
+function scheduleIncludesLocalPlayer(schedule) {
+    if (!Array.isArray(schedule)) return false;
+    const localKey = tournamentPeerIdentityKey(tournamentLocalCanonicalId());
+    return schedule.some((pair) => Array.isArray(pair) && pair.some((peerId) => !!peerId && (
+        peerId === myPeerId
+        || selfAliases.has(peerId)
+        || peerRepresentsLocalPlayer(peerId)
+        || tournamentPeerIdentityKey(peerId) === localKey
+    )));
+}
+
+function enterTournamentModeFromLocalSwitch() {
+    if (window.webxdc && hasObservedActiveTournament()) {
+        requestTournamentJoin();
+        return;
+    }
+    beginTournamentMode({ fromRemote: false, broadcast: true });
+}
+
+function requestTournamentJoin() {
+    cancelTournamentJoinRequest();
+    const requestId = createSeatSeed();
+    tournamentJoinRequest.requestId = requestId;
+    tournamentJoinRequest.timer = setTimeout(() => {
+        if (tournamentJoinRequest.requestId !== requestId) return;
+        cancelTournamentJoinRequest();
+        observedActiveTournament = null;
+        if (gameModeSelect.value !== 'webxdc-tournament' || (tournamentState.enabled && !tournamentState.finished)) return;
+        debugLog('TOURNAMENT_JOIN_QUERY_TIMEOUT', { requestId });
+        beginTournamentMode({ fromRemote: false, broadcast: true });
+        updateModeSelectState();
+        updateConnectionIndicator();
+    }, TOURNAMENT_JOIN_QUERY_TIMEOUT_MS);
+    showToast('Looking for a tournament in progress…', { variant: 'info', duration: 2500 });
+    debugLog('TOURNAMENT_JOIN_QUERY_SENT', { requestId });
+    sendXdcUpdate({
+        action: 'TOURNAMENT_QUERY',
+        requestId,
+        peerId: myPeerId,
+        name: myName,
+        addr: myAddr
+    }, '', 'Tournament query');
+}
+
+function respondToTournamentQuery(payload, senderPeerId) {
+    if (gameModeSelect.value !== 'webxdc-tournament' || !tournamentState.enabled
+        || tournamentState.finished || !tournamentState.seatSeed) return;
+    if (isTournamentClockExpired(Date.now())) return;
+    sendXdcUpdate({
+        action: 'TOURNAMENT_INFO',
+        requestId: payload.requestId,
+        targetPeerId: typeof payload.peerId === 'string' ? payload.peerId : senderPeerId,
+        seatSeed: tournamentState.seatSeed,
+        schedule: tournamentState.schedule,
+        pairIndex: tournamentState.pairIndex,
+        roundIndex: tournamentState.roundIndex,
+        cycle: tournamentState.cycle,
+        matchNumber: tournamentState.matchNumber,
+        countdownDeadlineTs: tournamentState.countdownDeadlineTs,
+        tournamentRemainingMs: tournamentRemainingMs(),
+        tournamentLengthMinutes: tournamentState.lengthMinutes,
+        entrants: (tournamentState.pendingEntrants || []).slice(),
+        tournamentResults: Array.from(tournamentResults.values(), (result) => ({ ...result })),
+        peerId: myPeerId,
+        name: myName,
+        addr: myAddr
+    }, '', 'Tournament info');
+    debugLog('TOURNAMENT_QUERY_RESPONDED', { requestId: payload.requestId, senderPeerId });
+}
+
+function handleTournamentInfo(payload) {
+    if (!tournamentJoinRequest.requestId || payload.requestId !== tournamentJoinRequest.requestId) return;
+    if (gameModeSelect.value !== 'webxdc-tournament') {
+        cancelTournamentJoinRequest();
+        return;
+    }
+    const seatSeed = typeof payload.seatSeed === 'string' ? payload.seatSeed : null;
+    if (!seatSeed || retiredTournamentSeeds.has(seatSeed) || !Array.isArray(payload.schedule)) return;
+    cancelTournamentJoinRequest();
+    const hasCountdown = Number.isFinite(payload.countdownDeadlineTs) && payload.countdownDeadlineTs > Date.now();
+    beginTournamentMode({
+        fromRemote: true,
+        schedule: payload.schedule,
+        seatSeed,
+        pairIndex: Number.isInteger(payload.pairIndex) ? payload.pairIndex : 0,
+        roundIndex: Number.isInteger(payload.roundIndex) ? payload.roundIndex : 0,
+        cycle: Number.isInteger(payload.cycle) ? payload.cycle : 0,
+        matchNumber: Number.isInteger(payload.matchNumber) && payload.matchNumber > 0 ? payload.matchNumber : 1,
+        countdownDeadlineTs: hasCountdown ? payload.countdownDeadlineTs : null,
+        skipCountdown: !hasCountdown,
+        remainingMs: Number.isFinite(payload.tournamentRemainingMs) ? payload.tournamentRemainingMs : null,
+        tournamentLengthMinutes: normalizeTournamentLengthMinutes(payload.tournamentLengthMinutes, gameOptions.tournamentLengthMinutes),
+        broadcast: false
+    });
+    if (tournamentState.seatSeed !== seatSeed || !tournamentState.enabled) return;
+    mergePlayerScores({
+        gameMode: 'webxdc-tournament',
+        tournamentState: { seatSeed },
+        tournamentResults: Array.isArray(payload.tournamentResults) ? payload.tournamentResults : []
+    });
+    addTournamentEntrants(payload.entrants);
+    const isRosterMember = scheduleIncludesLocalPlayer(payload.schedule);
+    const entrantId = tournamentLocalCanonicalId();
+    if (!isRosterMember) addTournamentEntrants([entrantId]);
+    debugLog('TOURNAMENT_JOINED_IN_PROGRESS', { seatSeed, isRosterMember, roundIndex: tournamentState.roundIndex });
+    sendXdcUpdate({
+        action: 'TOURNAMENT_JOIN',
+        seatSeed,
+        entrantId,
+        newEntrant: !isRosterMember,
+        peerId: myPeerId,
+        name: myName,
+        addr: myAddr
+    }, '', 'Tournament join');
+    showToast(isRosterMember
+        ? 'Rejoined the tournament in progress.'
+        : 'Joined the tournament in progress. You will be paired starting with the next round-robin.', {
+        variant: 'success',
+        duration: 6000
+    });
+    updateAllPlayersScoreboard();
+    updateModeSelectState();
+}
+
+function handleTournamentJoin(payload) {
+    if (gameModeSelect.value !== 'webxdc-tournament' || !tournamentState.enabled || tournamentState.finished) return;
+    if (payload.seatSeed !== tournamentState.seatSeed) return;
+    if (payload.newEntrant && typeof payload.entrantId === 'string') {
+        addTournamentEntrants([payload.entrantId]);
+    }
+    broadcastStateSync('tournament-entrant');
+}
+
+function addTournamentEntrants(peerIds) {
+    if (!Array.isArray(peerIds) || !peerIds.length) return;
+    if (!Array.isArray(tournamentState.pendingEntrants)) tournamentState.pendingEntrants = [];
+    const rosterKeys = new Set(tournamentPeersFromSchedule(tournamentState.schedule).map(tournamentPeerIdentityKey));
+    for (const peerId of peerIds) {
+        if (typeof peerId !== 'string' || !peerId || tournamentState.pendingEntrants.includes(peerId)) continue;
+        if (rosterKeys.has(tournamentPeerIdentityKey(canonicalTournamentPeerId(peerId)))) continue;
+        tournamentState.pendingEntrants.push(peerId);
+    }
+    tournamentState.pendingEntrants.sort((a, b) => a.localeCompare(b));
+}
+
+// Called when a round-robin cycle completes: late joiners become regular entrants.
+function mergeTournamentEntrantsIntoSchedule() {
+    const pending = Array.isArray(tournamentState.pendingEntrants)
+        ? tournamentState.pendingEntrants.slice().sort((a, b) => a.localeCompare(b))
+        : [];
+    tournamentState.pendingEntrants = [];
+    if (!pending.length) return false;
+    const schedule = (tournamentState.schedule || []).map((pair) => pair.slice());
+    const existing = [];
+    for (const pair of schedule) {
+        for (const peerId of pair) if (peerId && !existing.includes(peerId)) existing.push(peerId);
+    }
+    const rosterKeys = new Set(tournamentPeersFromSchedule(schedule).map(tournamentPeerIdentityKey));
+    const added = [];
+    for (const entrant of pending) {
+        const key = tournamentPeerIdentityKey(canonicalTournamentPeerId(entrant));
+        if (rosterKeys.has(key)) continue;
+        for (const other of existing) schedule.push([entrant, other].sort((a, b) => a.localeCompare(b)));
+        existing.push(entrant);
+        rosterKeys.add(key);
+        added.push(entrant);
+    }
+    if (!added.length) return false;
+    tournamentState.schedule = schedule;
+    tournamentState.rounds = buildTournamentRounds(tournamentPeersFromSchedule(schedule));
+    debugLog('TOURNAMENT_ENTRANTS_MERGED', { added, rounds: tournamentState.rounds.length });
+    return true;
+}
+
+// A peer that already advanced to a later round-robin may have merged entrants we missed.
+function adoptRemoteTournamentSchedule(schedule) {
+    if (!Array.isArray(schedule) || !schedule.length
+        || !schedule.every((pair) => Array.isArray(pair) && pair.length === 2 && pair.every((id) => typeof id === 'string'))) return false;
+    if (JSON.stringify(schedule) === JSON.stringify(tournamentState.schedule)) return false;
+    tournamentState.schedule = schedule.map((pair) => pair.slice());
+    tournamentState.rounds = buildTournamentRounds(tournamentPeersFromSchedule(tournamentState.schedule));
+    const rosterKeys = new Set(tournamentPeersFromSchedule(tournamentState.schedule).map(tournamentPeerIdentityKey));
+    tournamentState.pendingEntrants = (tournamentState.pendingEntrants || [])
+        .filter((peerId) => !rosterKeys.has(tournamentPeerIdentityKey(canonicalTournamentPeerId(peerId))));
+    return true;
 }

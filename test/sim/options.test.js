@@ -172,10 +172,9 @@ test('options: tournament length synchronizes at start and late peers receive th
 
     for (const peer of [alice, bob]) {
         assert.equal(H.ev(peer, 'tournamentState.lengthMinutes'), 30);
-        assert.equal(
-            H.ev(peer, 'tournamentState.deadlineTs - tournamentState.countdownDeadlineTs'),
-            30 * 60 * 1000
-        );
+        assert.ok(Math.abs(
+            H.ev(peer, 'tournamentState.deadlineTs - tournamentState.countdownDeadlineTs') - 30 * 60 * 1000
+        ) < 1000, 'the tournament clock starts after the pre-start countdown (allowing delivery latency)');
         assert.equal(H.ev(peer, 'tournamentClockDisplayMs()'), 30 * 60 * 1000);
         assert.equal(H.$(peer, '#game-tournament-length').value, '30');
     }
@@ -183,6 +182,9 @@ test('options: tournament length synchronizes at start and late peers receive th
     const latePeer = H.makePeer(net, 'carol@x', 'Carol');
     const remainingAtSend = H.ev(alice, 'tournamentRemainingMs()');
     H.ev(alice, "broadcastStateSync('late-peer-tournament-clock')");
+    assert.equal(H.$(latePeer, '#game-mode').value, 'webxdc', 'late peers are not switched into the tournament');
+    H.setMode(latePeer, 'webxdc-tournament');
+    assert.equal(H.ev(latePeer, 'tournamentState.seatSeed'), H.ev(alice, 'tournamentState.seatSeed'));
     assert.equal(H.ev(latePeer, 'tournamentState.lengthMinutes'), 30);
     assert.ok(Math.abs(H.ev(latePeer, 'tournamentState.deadlineTs - Date.now()') - remainingAtSend) < 1000);
     assert.equal(H.ev(latePeer, 'tournamentClockDisplayMs()'), 30 * 60 * 1000);

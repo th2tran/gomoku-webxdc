@@ -61,6 +61,8 @@ Tournament standings are synchronized as a union of match results, each counted 
 
 The tournament length can be set to 15, 30, 45, or 60 minutes in **Options**. The starting peer broadcasts the selection, and tournament state snapshots carry the remaining time so peers joining late align with the active tournament clock.
 
+Peers that stay in **Network (2 players)** mode are never pulled into a tournament already in progress. When such a peer switches to **Network (Tournament)** while a tournament is running, the app asks the participants for the running tournament and joins it instead of starting a new one: the late joiner adopts the same schedule, standings, and remaining clock, spectates the current round-robin, and is added to the pairings when the next round-robin begins. If nobody answers, a new tournament starts.
+
 ## How to play
 
 Gomoku is a strategy board game played on a 15x15 grid. Players take turns placing stones, and the goal is to create an unbroken line of five stones in any direction: horizontally, vertically, or diagonally.

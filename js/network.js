@@ -783,6 +783,10 @@ function handleIncomingPayload(payload, meta = {}) {
         announcePresence('PRESENCE');
         broadcastStateSync('new-peer-detected');
         sendPeerListSync('new-peer-detected');
+    } else if (isLive && isNewPeer && payload.action === 'PRESENCE' && !isSelfSender
+        && gameModeSelect.value === 'webxdc-tournament' && tournamentState.enabled && !tournamentState.finished) {
+        // A newcomer's first PRESENCE: advertise the running tournament so it can be joined.
+        announcePresence('PRESENCE');
     }
 
     if (payload.action === 'NOTIFY') {
@@ -851,7 +855,37 @@ function handleIncomingPayload(payload, meta = {}) {
         return;
     }
 
-    if (payload.action === 'JOIN' || payload.action === 'PRESENCE') return;
+    if (payload.action === 'JOIN' || payload.action === 'PRESENCE') {
+        if (!isSelfSender && payload.tournament && gameModeSelect.value !== 'webxdc-tournament') {
+            noteObservedTournament(payload.tournament);
+        }
+        return;
+    }
+
+    if (payload.action === 'TOURNAMENT_QUERY') {
+        if (isLive && !isSelfSender) respondToTournamentQuery(payload, senderPeerId);
+        return;
+    }
+    if (payload.action === 'TOURNAMENT_INFO') {
+        if (isLive && !isSelfSender) handleTournamentInfo(payload);
+        return;
+    }
+    if (payload.action === 'TOURNAMENT_JOIN') {
+        if (isLive && !isSelfSender) handleTournamentJoin(payload);
+        return;
+    }
+
+    // Peers outside tournament mode never get pulled into a tournament by its progress
+    // traffic; they only remember it so switching modes can join it. The one exception
+    // is a fresh TOURNAMENT_MODE start whose roster includes this peer.
+    if (gameModeSelect.value !== 'webxdc-tournament' && isTournamentScopedPayload(payload)) {
+        noteObservedTournament(payload);
+        const isRosterStart = payload.action === 'TOURNAMENT_MODE' && scheduleIncludesLocalPlayer(payload.schedule);
+        if (!isRosterStart) {
+            debugLog('TOURNAMENT_PAYLOAD_IGNORED', { reason: 'not-in-tournament-mode', action: payload.action, gameId: payload.gameId || null });
+            return;
+        }
+    }
 
     if ((payload.action === 'TOURNAMENT_MODE' || (payload.action === 'RESET' && payload.tournamentReset))
         && retiredTournamentSeeds.has(payload.seatSeed)) {
@@ -1597,6 +1631,11 @@ function announcePresence(action = 'JOIN') {
     rememberConnectedPlayer(myPeerId, myName, myAddr);
 
     const update = { payload: { action: action, addr: myAddr, name: myName, peerId: myPeerId } };
+    if (gameModeSelect.value === 'webxdc-tournament' && tournamentState.enabled
+        && !tournamentState.finished && tournamentState.seatSeed) {
+        // Lets peers outside tournament mode know there is a tournament they can join.
+        update.payload.tournament = { seatSeed: tournamentState.seatSeed, deadlineTs: tournamentState.deadlineTs };
+    }
     let info = '';
     let summary = `${myName} is online in Gomoku.`;
     if (action === 'JOIN') {
@@ -1663,7 +1702,9 @@ function buildStatePayload(record = null) {
                 remainingMs: tournamentRemainingMs(),
                 cycle: tournamentState.cycle,
                 matchNumber: tournamentState.matchNumber,
-                roundIndex: tournamentState.roundIndex
+                roundIndex: tournamentState.roundIndex,
+                schedule: tournamentState.schedule,
+                entrants: (tournamentState.pendingEntrants || []).slice()
             }
         }
     };
@@ -1844,6 +1885,9 @@ function applyStatePayload(payload, meta = {}) {
             ? state.tournamentState.matchNumber
             : tournamentState.matchNumber;
         tournamentState.expiryNotified = false;
+        if (meta.isLive !== false && tournamentRoundsActive()) {
+            addTournamentEntrants(state.tournamentState?.entrants);
+        }
         // Only run side effects (seat assignment, timers) for live messages.
         // Historical replay must not start timers or drive pairings — those old
         // STATEs have expired deadlines and stale pair indices.

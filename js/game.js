@@ -264,6 +264,9 @@
                 applyStateToRecord(rec, payload.state);
                 const st = payload.state || {};
                 mergePlayerScores(st);
+                if (tournamentRoundsActive() && st.tournamentState?.seatSeed === tournamentState.seatSeed) {
+                    addTournamentEntrants(st.tournamentState.entrants);
+                }
                 // Round catch-up: a peer ahead of us already started the next round.
                 if (tournamentRoundsActive() && st.tournamentState
                     && Number.isInteger(st.tournamentState.roundIndex)
@@ -276,6 +279,10 @@
                         if (tournamentState.roundAdvanceTimer) {
                             clearTimeout(tournamentState.roundAdvanceTimer);
                             tournamentState.roundAdvanceTimer = null;
+                        }
+                        if (remoteCycle > (tournamentState.cycle || 0)) {
+                            adoptRemoteTournamentSchedule(st.tournamentState.schedule);
+                            mergeTournamentEntrantsIntoSchedule();
                         }
                         tournamentState.cycle = remoteCycle;
                         if (Number.isInteger(st.tournamentState.matchNumber)) tournamentState.matchNumber = st.tournamentState.matchNumber;
@@ -625,7 +632,10 @@
             // Peers that broadcast LEAVE during this tournament. Later-round matches
             // against them resolve as walkovers. Driven only by LEAVE messages (never
             // by roster snapshots) so every peer reaches the same conclusion.
-            departed: new Set()
+            departed: new Set(),
+            // Late joiners (raw peer IDs) who joined mid round-robin. They spectate
+            // until the current cycle completes, then get merged into the schedule.
+            pendingEntrants: []
         };
 
         function getChatInstanceInfo() {
@@ -1712,6 +1722,8 @@
                 gameModeSelect.value = 'webxdc';
                 return;
             }
+            cancelTournamentJoinRequest();
+            if (e.target.value !== 'webxdc-tournament') rememberActiveLocalTournament();
             if (e.target.value === 'pve') {
                 const humanName = cleanPlayerName(myName || 'Player');
                 pveComputerPlayer = 2;
@@ -1745,7 +1757,7 @@
                 p2NameInput.value = networkPlayers[2] ? p2NameInput.value : "Waiting for P2 (White)";
                 announcePresence();
             } else if (e.target.value === 'webxdc-tournament') {
-                beginTournamentMode({ fromRemote: false, broadcast: true });
+                enterTournamentModeFromLocalSwitch();
             } else {
                 tournamentState.enabled = false;
                 tournamentState.finished = false;

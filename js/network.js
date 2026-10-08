@@ -939,7 +939,11 @@ function handleIncomingPayload(payload, meta = {}) {
                     : Date.now() + 10000,
                 deadlineTs: Number.isFinite(payload.deadlineTs)
                     ? payload.deadlineTs
-                    : Date.now() + tournamentDurationMs,
+                    : null,
+                remainingMs: Number.isFinite(payload.tournamentRemainingMs)
+                    ? payload.tournamentRemainingMs
+                    : null,
+                tournamentLengthMinutes: normalizeTournamentLengthMinutes(payload.tournamentLengthMinutes, 60),
                 cycle: Number.isInteger(payload.cycle) ? payload.cycle : 0,
                 matchNumber: Number.isInteger(payload.matchNumber) && payload.matchNumber > 0 ? payload.matchNumber : 1,
                 broadcast: false
@@ -1041,7 +1045,15 @@ function handleIncomingPayload(payload, meta = {}) {
             gameModeSelect.value = 'webxdc-tournament';
             resetTournamentProgress(
                 typeof payload.seatSeed === 'string' && payload.seatSeed ? payload.seatSeed : createSeatSeed(),
-                Number.isFinite(payload.tournamentDeadlineTs) ? payload.tournamentDeadlineTs : Date.now() + tournamentDurationMs
+                Number.isFinite(payload.tournamentRemainingMs)
+                    ? Date.now() + Math.max(0, payload.tournamentRemainingMs)
+                    : Number.isFinite(payload.tournamentDeadlineTs)
+                        ? payload.tournamentDeadlineTs
+                        : null,
+                normalizeTournamentLengthMinutes(payload.tournamentLengthMinutes, gameOptions.tournamentLengthMinutes),
+                Number.isFinite(payload.tournamentCountdownDeadlineTs)
+                    ? payload.tournamentCountdownDeadlineTs
+                    : Date.now() + 10000
             );
             startTournamentCountdown();
             updateTournamentMatchState(0);
@@ -1647,6 +1659,8 @@ function buildStatePayload(record = null) {
                 seatSeed: tournamentState.seatSeed,
                 countdownDeadlineTs: tournamentState.countdownDeadlineTs,
                 deadlineTs: tournamentState.deadlineTs,
+                lengthMinutes: tournamentState.lengthMinutes,
+                remainingMs: tournamentRemainingMs(),
                 cycle: tournamentState.cycle,
                 matchNumber: tournamentState.matchNumber,
                 roundIndex: tournamentState.roundIndex
@@ -1811,9 +1825,18 @@ function applyStatePayload(payload, meta = {}) {
         tournamentState.countdownDeadlineTs = Number.isFinite(state.tournamentState?.countdownDeadlineTs)
             ? state.tournamentState.countdownDeadlineTs
             : null;
-        tournamentState.deadlineTs = Number.isFinite(state.tournamentState?.deadlineTs)
+        tournamentState.lengthMinutes = normalizeTournamentLengthMinutes(
+            state.tournamentState?.lengthMinutes,
+            tournamentState.lengthMinutes || gameOptions.tournamentLengthMinutes
+        );
+        tournamentState.deadlineTs = Number.isFinite(state.tournamentState?.remainingMs)
+            ? Date.now() + Math.max(0, state.tournamentState.remainingMs)
+            : Number.isFinite(state.tournamentState?.deadlineTs)
             ? state.tournamentState.deadlineTs
             : tournamentState.deadlineTs;
+        if (meta.isLive !== false) {
+            setTournamentLengthOption(tournamentState.lengthMinutes, { persist: true });
+        }
         tournamentState.cycle = Number.isInteger(state.tournamentState?.cycle) && state.tournamentState.cycle >= 0
             ? state.tournamentState.cycle
             : tournamentState.cycle;

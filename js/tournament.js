@@ -412,6 +412,24 @@ function createSeatSeed() {
     return `${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function normalizeTournamentLengthMinutes(value, fallback = 60) {
+    return [15, 30, 45, 60].includes(value) ? value : fallback;
+}
+
+function tournamentRemainingMs() {
+    return Number.isFinite(tournamentState.deadlineTs)
+        ? Math.max(0, tournamentState.deadlineTs - Date.now())
+        : null;
+}
+
+function tournamentClockDisplayMs() {
+    if (Number.isFinite(tournamentState.countdownDeadlineTs)
+        && Date.now() < tournamentState.countdownDeadlineTs) {
+        return tournamentState.lengthMinutes * 60 * 1000;
+    }
+    return tournamentRemainingMs();
+}
+
 function getTournamentSeatAssignment(pair, pairIndex, seatSeed = null, matchNumber = 0) {
     if (!Array.isArray(pair) || pair.length < 2) return [pair?.[0] || null, pair?.[1] || null];
     if (!seatSeed) {
@@ -812,7 +830,7 @@ function advanceTournamentMatch(winnerPeerId) {
     }, 5000);
 }
 
-function resetTournamentProgress(seatSeed = createSeatSeed(), deadlineTs = Date.now() + tournamentDurationMs) {
+function resetTournamentProgress(seatSeed = createSeatSeed(), deadlineTs = null, lengthMinutes = tournamentState.lengthMinutes, countdownDeadlineTs = Date.now() + 10000) {
     if (retiredTournamentSeeds.has(seatSeed)) {
         debugLog('TOURNAMENT_RESET_SKIPPED', { reason: 'retired-tournament', seatSeed });
         return;
@@ -824,11 +842,17 @@ function resetTournamentProgress(seatSeed = createSeatSeed(), deadlineTs = Date.
     tournamentState.pairIndex = 0;
     tournamentState.lastMatchKey = null;
     tournamentState.seatSeed = seatSeed;
-    tournamentState.deadlineTs = Number.isFinite(deadlineTs) ? deadlineTs : Date.now() + tournamentDurationMs;
+    tournamentState.lengthMinutes = normalizeTournamentLengthMinutes(lengthMinutes, gameOptions.tournamentLengthMinutes);
+    setTournamentLengthOption(tournamentState.lengthMinutes, { persist: true });
     tournamentState.cycle = 0;
     tournamentState.matchNumber = 1;
     tournamentState.expiryNotified = false;
-    tournamentState.countdownDeadlineTs = Date.now() + 10000;
+    tournamentState.countdownDeadlineTs = Number.isFinite(countdownDeadlineTs)
+        ? countdownDeadlineTs
+        : Date.now() + 10000;
+    tournamentState.deadlineTs = Number.isFinite(deadlineTs)
+        ? deadlineTs
+        : tournamentState.countdownDeadlineTs + tournamentState.lengthMinutes * 60 * 1000;
     if (tournamentState.roundAdvanceTimer) {
         clearTimeout(tournamentState.roundAdvanceTimer);
         tournamentState.roundAdvanceTimer = null;
@@ -868,7 +892,8 @@ function startTournamentCountdown() {
         tournamentState.pairIndex = 0;
     }
     if (!Number.isFinite(tournamentState.deadlineTs)) {
-        tournamentState.deadlineTs = Date.now() + tournamentDurationMs;
+        tournamentState.lengthMinutes = normalizeTournamentLengthMinutes(tournamentState.lengthMinutes, gameOptions.tournamentLengthMinutes);
+        tournamentState.deadlineTs = Date.now() + tournamentState.lengthMinutes * 60 * 1000;
     }
     if (!Number.isFinite(tournamentState.countdownDeadlineTs)) {
         tournamentState.countdownDeadlineTs = Date.now() + 10000;
@@ -910,7 +935,7 @@ function startTournamentCountdown() {
     updateModeSelectState();
 }
 
-function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0, schedule = null, countdownDeadlineTs = null, deadlineTs = null, seatSeed = null, cycle = 0, matchNumber = 1, broadcast = true } = {}) {
+function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0, schedule = null, countdownDeadlineTs = null, deadlineTs = null, remainingMs = null, tournamentLengthMinutes = null, seatSeed = null, cycle = 0, matchNumber = 1, broadcast = true } = {}) {
     const tournamentScoreSeed = tournamentState.seatSeed;
     const nextSchedule = Array.isArray(schedule) ? schedule : buildTournamentSchedule();
     const nextPairIndex = Number.isInteger(pairIndex) ? pairIndex : 0;
@@ -923,11 +948,19 @@ function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0
         : shouldPreserveTournamentClock
             ? tournamentState.countdownDeadlineTs
             : Date.now() + 10000;
-    const nextDeadlineTs = explicitDeadlineTs
-        ? deadlineTs
-        : shouldPreserveTournamentClock
-            ? tournamentState.deadlineTs
-            : Date.now() + tournamentDurationMs;
+    const nextLengthMinutes = normalizeTournamentLengthMinutes(
+        tournamentLengthMinutes,
+        shouldPreserveTournamentClock
+            ? tournamentState.lengthMinutes
+            : gameOptions.tournamentLengthMinutes
+    );
+    const nextDeadlineTs = Number.isFinite(remainingMs)
+        ? Date.now() + Math.max(0, remainingMs)
+        : explicitDeadlineTs
+            ? deadlineTs
+            : shouldPreserveTournamentClock
+                ? tournamentState.deadlineTs
+                : Math.max(Date.now(), nextCountdownDeadlineTs) + nextLengthMinutes * 60 * 1000;
     const nextSeatSeed = typeof seatSeed === 'string' && seatSeed ? seatSeed : createSeatSeed();
     if (retiredTournamentSeeds.has(nextSeatSeed)) {
         debugLog('TOURNAMENT_MODE_SKIPPED', { reason: 'retired-tournament', seatSeed: nextSeatSeed });
@@ -944,8 +977,12 @@ function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0
     tournamentState.pairIndex = nextPairIndex;
     tournamentState.lastMatchKey = null;
     tournamentState.seatSeed = nextSeatSeed;
+    tournamentState.lengthMinutes = nextLengthMinutes;
     tournamentState.countdownDeadlineTs = nextCountdownDeadlineTs;
     tournamentState.deadlineTs = nextDeadlineTs;
+    if (fromRemote) {
+        setTournamentLengthOption(nextLengthMinutes, { persist: true });
+    }
     tournamentState.cycle = Number.isInteger(cycle) && cycle >= 0 ? cycle : 0;
     tournamentState.matchNumber = Number.isInteger(matchNumber) && matchNumber > 0 ? matchNumber : 1;
     tournamentState.expiryNotified = false;
@@ -1019,6 +1056,8 @@ function beginTournamentMode({ fromRemote = false, pairIndex = 0, roundIndex = 0
             roundIndex: tournamentState.roundIndex,
             countdownDeadlineTs: tournamentState.countdownDeadlineTs,
             deadlineTs: tournamentState.deadlineTs,
+            tournamentLengthMinutes: tournamentState.lengthMinutes,
+            tournamentRemainingMs: tournamentRemainingMs(),
             seatSeed: tournamentState.seatSeed,
             cycle: tournamentState.cycle,
             matchNumber: tournamentState.matchNumber,
@@ -1048,6 +1087,8 @@ function broadcastTournamentMode() {
         schedule: tournamentState.schedule,
         countdownDeadlineTs: tournamentState.countdownDeadlineTs,
         deadlineTs: tournamentState.deadlineTs,
+        remainingMs: tournamentRemainingMs(),
+        tournamentLengthMinutes: tournamentState.lengthMinutes,
         seatSeed: tournamentState.seatSeed,
         cycle: tournamentState.cycle,
         matchNumber: tournamentState.matchNumber,

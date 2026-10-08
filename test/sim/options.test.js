@@ -51,11 +51,11 @@ test('options: dialog opens, traps focus, closes, and avoids the title debug ges
     assert.equal(button.getAttribute('aria-expanded'), 'true');
     assert.equal(peer.doc.activeElement, H.$(peer, '#game-sound-toggle'));
     assert.equal(H.ev(peer, 'debugTitleTapTimes.length'), 0);
-    H.$(peer, '#game-fireworks-toggle').focus();
+    H.$(peer, '#game-tournament-length').focus();
     peer.doc.dispatchEvent(new peer.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
     assert.equal(peer.doc.activeElement, H.$(peer, '#game-options-close-btn'));
     peer.doc.dispatchEvent(new peer.window.KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
-    assert.equal(peer.doc.activeElement, H.$(peer, '#game-fireworks-toggle'));
+    assert.equal(peer.doc.activeElement, H.$(peer, '#game-tournament-length'));
     peer.doc.dispatchEvent(new peer.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     assert.equal(popup.getAttribute('aria-hidden'), 'true');
     assert.equal(peer.doc.activeElement, button);
@@ -74,17 +74,23 @@ test('options: toggles persist locally across app launches and do not affect pee
     const bob = H.makePeer(net, 'bob@x', 'Bob');
     assert.equal(H.$(alice, '#game-sound-toggle').checked, true);
     assert.equal(H.$(alice, '#game-fireworks-toggle').checked, true);
+    assert.equal(H.$(alice, '#game-tournament-length').value, '60');
     const before = net.log.length;
     click(alice, '#game-sound-toggle');
     click(alice, '#game-fireworks-toggle');
     const saved = alice.window.localStorage.getItem('gomoku-game-options');
-    assert.deepEqual(JSON.parse(saved), { sound: false, fireworks: false });
+    assert.deepEqual(JSON.parse(saved), { sound: false, fireworks: false, tournamentLengthMinutes: 60 });
     assert.equal(net.log.length, before, 'preferences are not broadcast');
     assert.equal(H.$(bob, '#game-sound-toggle').checked, true);
     assert.equal(H.$(bob, '#game-fireworks-toggle').checked, true);
-    const reopened = H.makePeer(new H.Network(), 'alice@x', 'Alice', { 'gomoku-game-options': saved });
+    H.$(alice, '#game-tournament-length').value = '30';
+    H.$(alice, '#game-tournament-length').dispatchEvent(new alice.window.Event('change', { bubbles: true }));
+    const savedLength = alice.window.localStorage.getItem('gomoku-game-options');
+    assert.equal(JSON.parse(savedLength).tournamentLengthMinutes, 30);
+    const reopened = H.makePeer(new H.Network(), 'alice@x', 'Alice', { 'gomoku-game-options': savedLength });
     assert.equal(H.$(reopened, '#game-sound-toggle').checked, false);
     assert.equal(H.$(reopened, '#game-fireworks-toggle').checked, false);
+    assert.equal(H.$(reopened, '#game-tournament-length').value, '30');
     for (const peer of [alice, bob, reopened]) assert.deepEqual(peer.errors, []);
 });
 
@@ -146,10 +152,45 @@ test('options: malformed saved settings use enabled defaults and storage failure
     assert.equal(H.$(peer, '#game-sound-toggle').checked, true);
     assert.equal(H.$(peer, '#game-fireworks-toggle').checked, true);
     peer.window.localStorage.setItem('gomoku-game-options', '{"sound":"false","fireworks":false}');
-    assert.deepEqual(JSON.parse(H.ev(peer, 'JSON.stringify(loadGameOptions())')), { sound: true, fireworks: false });
+    assert.deepEqual(JSON.parse(H.ev(peer, 'JSON.stringify(loadGameOptions())')), {
+        sound: true, fireworks: false, tournamentLengthMinutes: 60
+    });
     peer.window.Storage.prototype.setItem = () => { throw new Error('Storage unavailable'); };
     click(peer, '#game-sound-toggle');
     assert.equal(H.ev(peer, 'gameOptions.sound'), false, 'preference still applies for this session');
     assert.match(H.toasts(peer).join(' '), /could not be saved/);
     assert.deepEqual(peer.errors, []);
+});
+
+test('options: tournament length synchronizes at start and late peers receive the remaining clock', () => {
+    const net = new H.Network();
+    const alice = H.makePeer(net, 'alice@x', 'Alice');
+    const bob = H.makePeer(net, 'bob@x', 'Bob');
+    H.$(alice, '#game-tournament-length').value = '30';
+    H.$(alice, '#game-tournament-length').dispatchEvent(new alice.window.Event('change', { bubbles: true }));
+    H.setMode(alice, 'webxdc-tournament');
+
+    for (const peer of [alice, bob]) {
+        assert.equal(H.ev(peer, 'tournamentState.lengthMinutes'), 30);
+        assert.equal(
+            H.ev(peer, 'tournamentState.deadlineTs - tournamentState.countdownDeadlineTs'),
+            30 * 60 * 1000
+        );
+        assert.equal(H.ev(peer, 'tournamentClockDisplayMs()'), 30 * 60 * 1000);
+        assert.equal(H.$(peer, '#game-tournament-length').value, '30');
+    }
+
+    const latePeer = H.makePeer(net, 'carol@x', 'Carol');
+    const remainingAtSend = H.ev(alice, 'tournamentRemainingMs()');
+    H.ev(alice, "broadcastStateSync('late-peer-tournament-clock')");
+    assert.equal(H.ev(latePeer, 'tournamentState.lengthMinutes'), 30);
+    assert.ok(Math.abs(H.ev(latePeer, 'tournamentState.deadlineTs - Date.now()') - remainingAtSend) < 1000);
+    assert.equal(H.ev(latePeer, 'tournamentClockDisplayMs()'), 30 * 60 * 1000);
+    assert.equal(H.$(latePeer, '#game-tournament-length').value, '30');
+    assert.equal(
+        JSON.parse(latePeer.window.localStorage.getItem('gomoku-game-options')).tournamentLengthMinutes,
+        30,
+        'the synchronized length remains selected after the peer relaunches'
+    );
+    for (const peer of [alice, bob, latePeer]) assert.deepEqual(peer.errors, []);
 });

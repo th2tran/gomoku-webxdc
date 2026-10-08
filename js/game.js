@@ -591,7 +591,6 @@
         let moveTimerInterval = null;
         let timeoutResolutionInFlight = false;
         const tournamentPlayerAddrLock = new Map(); // addr → peerId: first device that claimed a tournament slot for that addr
-        const tournamentDurationMs = 60 * 60 * 1000;
         const tournamentSingleRemainingConfirmation = {
             pending: false,
             timer: null,
@@ -606,6 +605,7 @@
             finished: false,
             winCounts: {},
             seatSeed: null,
+            lengthMinutes: 60,
             deadlineTs: null,
             cycle: 0,
             expiryNotified: false,
@@ -1061,7 +1061,7 @@
         function updateMoveTimerDisplay() {
             if (!moveTimerEl) return;
             const tournamentRemainingMs = gameModeSelect.value === 'webxdc-tournament'
-                ? getTournamentRemainingMs(Date.now())
+                ? tournamentClockDisplayMs()
                 : null;
             const tournamentText = Number.isFinite(tournamentRemainingMs)
                 ? ` • Tournament: ${formatClockDuration(tournamentRemainingMs)}`
@@ -1892,6 +1892,15 @@
                         tournamentDeadlineTs: gameModeSelect.value === 'webxdc-tournament'
                             ? tournamentState.deadlineTs
                             : null,
+                        tournamentLengthMinutes: gameModeSelect.value === 'webxdc-tournament'
+                            ? tournamentState.lengthMinutes
+                            : null,
+                        tournamentRemainingMs: gameModeSelect.value === 'webxdc-tournament'
+                            ? tournamentRemainingMs()
+                            : null,
+                        tournamentCountdownDeadlineTs: gameModeSelect.value === 'webxdc-tournament'
+                            ? tournamentState.countdownDeadlineTs
+                            : null,
                         networkPlayers: gameModeSelect.value === 'webxdc' ? { 1: networkPlayers[1], 2: networkPlayers[2] } : undefined,
                         addr: myAddr,
                         name: myName,
@@ -2338,14 +2347,17 @@
             if (gameModeSelect.value === 'webxdc-tournament') {
                 const startTournamentReset = () => {
                     const freshSeatSeed = createSeatSeed();
-                    const freshDeadlineTs = Date.now() + tournamentDurationMs;
+                    const freshLengthMinutes = normalizeTournamentLengthMinutes(gameOptions.tournamentLengthMinutes);
+                    const freshCountdownDeadlineTs = Date.now() + 10000;
+                    const freshDeadlineTs = freshCountdownDeadlineTs + freshLengthMinutes * 60 * 1000;
                     const freshSchedule = buildTournamentSchedule();
                     beginTournamentMode({
                         fromRemote: false,
                         pairIndex: 0,
                         schedule: freshSchedule,
-                        countdownDeadlineTs: Date.now() + 10000,
+                        countdownDeadlineTs: freshCountdownDeadlineTs,
                         deadlineTs: freshDeadlineTs,
+                        tournamentLengthMinutes: freshLengthMinutes,
                         seatSeed: freshSeatSeed,
                         cycle: 0,
                         matchNumber: 1,

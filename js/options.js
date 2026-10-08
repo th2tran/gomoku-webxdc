@@ -8,8 +8,29 @@ function loadGameOptions() {
     }
     return {
         sound: typeof saved?.sound === 'boolean' ? saved.sound : true,
-        fireworks: typeof saved?.fireworks === 'boolean' ? saved.fireworks : true
+        fireworks: typeof saved?.fireworks === 'boolean' ? saved.fireworks : true,
+        tournamentLengthMinutes: [15, 30, 45, 60].includes(saved?.tournamentLengthMinutes)
+            ? saved.tournamentLengthMinutes
+            : 60
     };
+}
+
+function persistGameOptions() {
+    try {
+        localStorage.setItem('gomoku-game-options', JSON.stringify(gameOptions));
+    } catch (err) {
+        console.warn('Gomoku: could not save game options', err);
+        showToast('Options changed, but could not be saved on this device.', { variant: 'info' });
+    }
+}
+
+function setTournamentLengthOption(value, { persist = false } = {}) {
+    if (![15, 30, 45, 60].includes(value)) return;
+    const changed = gameOptions.tournamentLengthMinutes !== value;
+    gameOptions.tournamentLengthMinutes = value;
+    const lengthSelect = document.getElementById('game-tournament-length');
+    if (lengthSelect) lengthSelect.value = String(value);
+    if (persist && changed) persistGameOptions();
 }
 
 function initializeGameOptions() {
@@ -18,9 +39,11 @@ function initializeGameOptions() {
     const close = document.getElementById('game-options-close-btn');
     const sound = document.getElementById('game-sound-toggle');
     const fireworks = document.getElementById('game-fireworks-toggle');
+    const tournamentLength = document.getElementById('game-tournament-length');
     const panel = popup.querySelector('[role="dialog"]');
     sound.checked = gameOptions.sound;
     fireworks.checked = gameOptions.fireworks;
+    tournamentLength.value = String(gameOptions.tournamentLengthMinutes);
 
     function hide() {
         popup.classList.remove('visible');
@@ -46,7 +69,7 @@ function initializeGameOptions() {
             event.preventDefault();
             hide();
         } else if (event.key === 'Tab') {
-            const controls = Array.from(panel.querySelectorAll('button, input'));
+            const controls = Array.from(panel.querySelectorAll('button, input, select'));
             const first = controls[0];
             const last = controls[controls.length - 1];
             if (event.shiftKey && document.activeElement === first) {
@@ -62,17 +85,17 @@ function initializeGameOptions() {
     function save() {
         gameOptions.sound = sound.checked;
         gameOptions.fireworks = fireworks.checked;
+        const selectedTournamentLength = Number(tournamentLength.value);
+        if ([15, 30, 45, 60].includes(selectedTournamentLength)) {
+            gameOptions.tournamentLengthMinutes = selectedTournamentLength;
+        }
         if (gomokuAudioGain) {
             gomokuAudioGain.gain.setValueAtTime(gameOptions.sound ? 1 : 0, gomokuAudioContext.currentTime);
         }
         if (!gameOptions.fireworks) stopFireworks();
-        try {
-            localStorage.setItem('gomoku-game-options', JSON.stringify(gameOptions));
-        } catch (err) {
-            console.warn('Gomoku: could not save game options', err);
-            showToast('Options changed, but could not be saved on this device.', { variant: 'info' });
-        }
+        persistGameOptions();
     }
     sound.addEventListener('change', save);
     fireworks.addEventListener('change', save);
+    tournamentLength.addEventListener('change', save);
 }

@@ -16,7 +16,7 @@ Gomoku WebXDC is a browser-based Gomoku (Five in a Row) game packaged as a WebXD
 - In-app Messages panel for messaging peers, plus status updates for join/leave events
 - Scoreboard tracking by connected peer
 - Reset and synchronization helpers for multiplayer matches
-- Options panel with independent sound and end-of-game fireworks toggles
+- Options panel with independent sound and end-of-game fireworks toggles, plus tournament length selection
 
 ## How it works
 
@@ -59,6 +59,8 @@ Tournament mode creates a round-robin schedule among connected peers and splits 
 
 Tournament standings are synchronized as a union of match results, each counted once by its game ID. Delayed snapshots cannot remove newer wins, and snapshots from other tournaments are rejected. New tournaments clear the result ledger. Older clients' score-only snapshots are merged as monotonic lower bounds; all peers should use the updated version for complete match-result synchronization.
 
+The tournament length can be set to 15, 30, 45, or 60 minutes in **Options**. The starting peer broadcasts the selection, and tournament state snapshots carry the remaining time so peers joining late align with the active tournament clock.
+
 ## How to play
 
 Gomoku is a strategy board game played on a 15x15 grid. Players take turns placing stones, and the goal is to create an unbroken line of five stones in any direction: horizontally, vertically, or diagonally.
@@ -81,8 +83,9 @@ Gomoku is a strategy board game played on a 15x15 grid. Players take turns placi
 ### Game options
 
 Click **Options** beside the title to turn game sound and end-of-game fireworks
-on or off independently. Both are enabled by default. Changes take effect
-immediately and are saved on your device without affecting other players.
+on or off independently, or choose the tournament length. Sound and fireworks are enabled by default. Changes take effect immediately and
+preferences are saved on your device; tournament length is shared when a
+tournament starts.
 Disabling fireworks also stops any active celebration. Tournament matches
 celebrate individually, and fireworks stop when the next round begins.
 
@@ -119,7 +122,7 @@ dist/gomoku-0.2.73.xdc
 - `js/tournament.js`: tournament scheduling and lifecycle.
 - `js/replay.js`: game history, SGF import/export, and replay.
 - `js/ai-manager.js`: computer-opponent selection and turn management.
-- `js/options.js`: local sound and fireworks preferences and the Options dialog.
+- `js/options.js`: local sound, fireworks, and tournament length preferences and the Options dialog.
 - `package.json`: build scripts and package metadata.
 - `js/sifu.js`: shared JavaScript AI engine for easy/medium play and the hard-mode fallback.
 - `js/worker.js`: thin worker entry point for the shared engine.

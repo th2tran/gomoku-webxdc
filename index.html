@@ -1637,7 +1637,15 @@
             <div class="how-to-play-body">
                 <label class="game-option"><input id="game-sound-toggle" type="checkbox" checked> Game sound</label>
                 <label class="game-option"><input id="game-fireworks-toggle" type="checkbox" checked> Fireworks at the end of each game</label>
-                <p id="game-options-description">Changes apply immediately and are saved on this device only.</p>
+                <label class="game-option" for="game-tournament-length">Tournament Length
+                    <select id="game-tournament-length">
+                        <option value="15">15mins</option>
+                        <option value="30">30mins</option>
+                        <option value="45">45mins</option>
+                        <option value="60">60mins</option>
+                    </select>
+                </label>
+                <p id="game-options-description">Sound and fireworks apply immediately. Preferences are saved on this device; tournament length is shared when a tournament starts.</p>
             </div>
         </div>
     </div>

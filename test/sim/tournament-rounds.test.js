@@ -40,6 +40,33 @@ function assertNoErrors(peers) {
     for (const p of peers) assert.deepEqual(p.errors.map((e) => e.message), [], `${p.name} errors`);
 }
 
+test('tournament: stale self aliases are deduplicated before pairing and seating', () => {
+    const { peers } = boot(['Alice', 'Bob', 'Carol']);
+    const [alice] = peers;
+    H.ev(alice, "selfAliases.add('alice-previous-session')");
+    H.setMode(alice, 'webxdc-tournament');
+
+    const schedule = JSON.parse(H.ev(alice, 'JSON.stringify(tournamentState.schedule)'));
+    const tournamentPeers = JSON.parse(H.ev(alice, 'JSON.stringify(tournamentPeersFromSchedule(tournamentState.schedule))'));
+    const rounds = JSON.parse(H.ev(alice, 'JSON.stringify(tournamentState.rounds)'));
+    const aliceId = H.ev(alice, 'myPeerId');
+    assert.equal(tournamentPeers.length, 3, 'rejoined Alice is counted once');
+    assert.ok(tournamentPeers.includes('alice-previous-session'));
+    assert.ok(!tournamentPeers.includes(aliceId), 'the current and previous-session IDs are canonicalized together');
+    assert.equal(schedule.length, 3, 'three distinct players produce three round-robin pairings');
+    assert.equal(rounds.length, 3, 'three distinct players produce three rounds with one bye each');
+    for (const round of rounds) {
+        for (const [peer1, peer2] of round) {
+            assert.notEqual(
+                H.ev(alice, `tournamentPeerIdentityKey(${JSON.stringify(peer1)})`),
+                H.ev(alice, `tournamentPeerIdentityKey(${JSON.stringify(peer2)})`),
+                'no match seats belong to the same peer address'
+            );
+        }
+    }
+    assertNoErrors(peers);
+});
+
 // Polls a condition across all peers until true or a timeout elapses. Needed
 // because tournament round-advance timers are real (not simulated) 5s
 // setTimeouts, so fixed sleeps are prone to flaking under CPU load / STATE

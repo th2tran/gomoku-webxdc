@@ -110,12 +110,39 @@ function tournamentRoundsActive() {
         && Array.isArray(tournamentState.rounds) && tournamentState.rounds.length > 0;
 }
 
+function tournamentLocalCanonicalId() {
+    let peerId = myPeerId;
+    for (const alias of selfAliases) peerId = alias;
+    return peerId;
+}
+
+function tournamentPeerIdentityKey(peerId) {
+    const addr = normalizeAddr(getAddrForPeer(peerId));
+    return addr ? `addr:${addr}` : `peer:${peerId}`;
+}
+
+function canonicalTournamentPeerId(peerId, localCanonicalId = tournamentLocalCanonicalId()) {
+    if (!peerId) return null;
+    const addr = normalizeAddr(getAddrForPeer(peerId) || connectedPlayers[peerId]?.addr);
+    const isLocalPeer = peerId === myPeerId
+        || peerRepresentsLocalPlayer(peerId)
+        || (!!addr && addr === normalizeAddr(myAddr));
+    return isLocalPeer ? localCanonicalId : (getCanonicalPeerId(peerId, addr) || peerId);
+}
+
 function tournamentPeersFromSchedule(schedule) {
-    const set = new Set();
+    const peersByIdentity = new Map();
+    const localCanonicalId = tournamentLocalCanonicalId();
     for (const pair of (schedule || [])) {
-        if (Array.isArray(pair)) for (const p of pair) if (p) set.add(p);
+        if (!Array.isArray(pair)) continue;
+        for (const peerId of pair) {
+            const canonicalId = canonicalTournamentPeerId(peerId, localCanonicalId);
+            if (!canonicalId) continue;
+            const identity = tournamentPeerIdentityKey(canonicalId);
+            if (!peersByIdentity.has(identity)) peersByIdentity.set(identity, canonicalId);
+        }
     }
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
+    return Array.from(peersByIdentity.values()).sort((a, b) => a.localeCompare(b));
 }
 
 function buildTournamentRounds(peers) {
@@ -181,6 +208,10 @@ function startTournamentRound(roundIndex, { announce = true } = {}) {
     let myGameId = null;
     let firstGameId = null;
     for (const pair of round) {
+        if (tournamentPeerIdentityKey(pair[0]) === tournamentPeerIdentityKey(pair[1])) {
+            debugLog('TOURNAMENT_PAIR_SKIPPED', { reason: 'duplicate-player-identity', pair, roundIndex: idx });
+            continue;
+        }
         const gid = tournamentMatchGameId(idx, pair);
         const seats = roundMatchSeats(pair, idx);
         let rec = games.get(gid);
@@ -381,13 +412,14 @@ function buildTournamentSchedule() {
     if (selfAliases.size > 0) {
         for (const alias of selfAliases) myEffectiveId = alias; // last-inserted alias
     }
-    const peers = [...new Set([myEffectiveId, ...Object.keys(connectedPlayers)])]
-        .map((peerId) => {
-            if (peerId === myEffectiveId) return myEffectiveId;
-            const record = connectedPlayers[peerId];
-            return getCanonicalPeerId(peerId, record?.addr || null);
-        })
-        .filter((peerId, index, arr) => peerId && arr.indexOf(peerId) === index);
+    const peersByIdentity = new Map();
+    for (const candidateId of [myEffectiveId, ...Object.keys(connectedPlayers)]) {
+        const peerId = canonicalTournamentPeerId(candidateId, myEffectiveId);
+        if (!peerId) continue;
+        const identity = tournamentPeerIdentityKey(peerId);
+        if (!peersByIdentity.has(identity)) peersByIdentity.set(identity, peerId);
+    }
+    const peers = [...peersByIdentity.values()];
     if (peers.length < 2) return [];
     const ordered = peers.slice().sort((a, b) => {
         const aName = displayNameForPeer(a);

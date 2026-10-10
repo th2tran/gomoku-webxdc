@@ -23,7 +23,7 @@ test('Messages timestamps include the local date and time for chat and status en
     const peer = H.makePeer(new H.Network(), 'alice@x', 'Alice');
     const at = new peer.window.Date(2026, 9, 5, 13, 35, 4).getTime();
     const date = new peer.window.Date(at);
-    const expected = `${date.toLocaleDateString()}  ${date.toLocaleTimeString()}`;
+    const expected = `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
     assert.equal(H.ev(peer, `formatNotificationTimestamp(${at})`), expected);
     for (const kind of ['chat', 'system']) {
         H.ev(peer, `addNotification("Dated ${kind}", { kind: "${kind}", at: ${at} })`);

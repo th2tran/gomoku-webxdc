@@ -294,6 +294,7 @@
                         }
                         if (remoteCycle > (tournamentState.cycle || 0)) {
                             adoptRemoteTournamentSchedule(st.tournamentState.schedule);
+                            pruneDepartedFromTournamentSchedule();
                             mergeTournamentEntrantsIntoSchedule();
                         }
                         tournamentState.cycle = remoteCycle;

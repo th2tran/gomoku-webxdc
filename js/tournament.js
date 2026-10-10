@@ -329,6 +329,7 @@ function maybeAdvanceTournamentRound() {
         if (completedCycle) {
             // A STATE from a faster peer may already have bumped the cycle; never double-advance.
             tournamentState.cycle = Math.max(tournamentState.cycle || 0, scheduledCycle + 1);
+            pruneDepartedFromTournamentSchedule();
             mergeTournamentEntrantsIntoSchedule();
             stopFireworks();
             addNotification(`Round-robin completed. Starting round-robin #${tournamentState.cycle + 1} before tournament time runs out.`, {
@@ -1438,6 +1439,20 @@ function addTournamentEntrants(peerIds) {
     tournamentState.pendingEntrants.sort((a, b) => a.localeCompare(b));
 }
 
+// Called when a round-robin cycle completes: peers who left during the finished
+// cycle are dropped so the next round-robin is built only from remaining players.
+function pruneDepartedFromTournamentSchedule() {
+    const departed = tournamentState.departed instanceof Set ? tournamentState.departed : null;
+    if (!departed || !departed.size || !Array.isArray(tournamentState.schedule)) return false;
+    const isDeparted = (peerId) => departed.has(peerId) || departed.has(canonicalTournamentPeerId(peerId));
+    const schedule = tournamentState.schedule.filter((pair) => Array.isArray(pair) && !pair.some(isDeparted));
+    if (schedule.length === tournamentState.schedule.length) return false;
+    tournamentState.schedule = schedule.map((pair) => pair.slice());
+    tournamentState.rounds = buildTournamentRounds(tournamentPeersFromSchedule(tournamentState.schedule));
+    debugLog('TOURNAMENT_DEPARTED_PRUNED', { departed: Array.from(departed), rounds: tournamentState.rounds.length });
+    return true;
+}
+
 // Called when a round-robin cycle completes: late joiners become regular entrants.
 function mergeTournamentEntrantsIntoSchedule() {
     const pending = Array.isArray(tournamentState.pendingEntrants)
@@ -1455,6 +1470,7 @@ function mergeTournamentEntrantsIntoSchedule() {
     for (const entrant of pending) {
         const key = tournamentPeerIdentityKey(canonicalTournamentPeerId(entrant));
         if (rosterKeys.has(key)) continue;
+        if (tournamentState.departed instanceof Set) tournamentState.departed.delete(entrant);
         for (const other of existing) schedule.push([entrant, other].sort((a, b) => a.localeCompare(b)));
         existing.push(entrant);
         rosterKeys.add(key);

@@ -450,6 +450,9 @@ function startPlayerExitMonitor() {
                 const localWinnerPeerId = myPeerId;
                 const leaverName = displayNameForPeer(activePeerId);
                 const leaverAddr = getAddrForPeer(activePeerId);
+                // The LEAVE we broadcast below is deduped on our own client, so record the
+                // departure locally just like receivers of that LEAVE will.
+                if (tournamentRoundsActive()) finishRoundGamesForLeaver(activePeerId);
                 applyPeerLeft(activePeerId, 'local-detection', `leave:${activePeerId}:${Date.now()}`, `${leaverName} left the game.`);
                 applyWithdrawalResult(activePeerId, localWinnerPeerId, 'local-detection');
                 sendXdcUpdate({
@@ -480,6 +483,7 @@ function startPlayerExitMonitor() {
             const leaveEventId = `leave:${stalePeer}:${Date.now()}`;
             const leaverName = displayNameForPeer(stalePeer);
             const leaverAddr = getAddrForPeer(stalePeer);
+            if (tournamentRoundsActive()) finishRoundGamesForLeaver(stalePeer);
             applyPeerLeft(stalePeer, 'local-detection', leaveEventId, `${leaverName} left the game.`);
 
             sendXdcUpdate({
@@ -495,7 +499,7 @@ function startPlayerExitMonitor() {
 
             const p1Owner = networkPlayers[1];
             const p2Owner = networkPlayers[2];
-            if (!gameOver && p1Owner && p2Owner && countMoves(board) > 0 && (stalePeer === p1Owner || stalePeer === p2Owner)) {
+            if (!gameOver && p1Owner && p2Owner && (countMoves(board) > 0 || tournamentRoundsActive()) && (stalePeer === p1Owner || stalePeer === p2Owner)) {
                 const winnerPeerId = stalePeer === p1Owner ? p2Owner : p1Owner;
                 if (winnerPeerId) {
                     applyWithdrawalResult(stalePeer, winnerPeerId, 'local-detection');
@@ -1522,7 +1526,10 @@ function applyPeerListSync(payload, sourcePeerId = null, sourceAddr = null, meta
             }
         }
         incomingPeerIds.add(peerId);
-        rememberConnectedPlayer(peerId, peer.name || 'Player', peerAddr || null, { refreshLastSeen: true, isLive: true });
+        // A third-party roster is not proof that this peer is alive: only the peer's own
+        // messages (PRESENCE heartbeat, moves, …) may refresh lastSeen. Otherwise live peers
+        // keep vouching for a dead one in their rosters and it never goes stale.
+        rememberConnectedPlayer(peerId, peer.name || 'Player', peerAddr || null, { refreshLastSeen: false, isLive: true });
     }
     if (sourcePeerId && sourcePeerId !== myPeerId && !knownLeftPeers.has(sourcePeerId)) {
         const sourceAddrNorm = normalizeAddr(sourceAddr) || null;

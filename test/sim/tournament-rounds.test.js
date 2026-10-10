@@ -430,3 +430,51 @@ test('tournament: heartbeat after a hidden-tab LEAVE must not re-seat the leaver
     assert.match(H.$(stayer, '#turn-indicator').textContent, /Tournament Final/);
     assertNoErrors([stayer]);
 });
+
+test('tournament: a peer that fails the heartbeat check is dropped from the next round-robin', async () => {
+    const { peers, byId } = boot(['Alice', 'Bob', 'Carol', 'Dave']);
+    H.setMode(peers[0], 'webxdc-tournament');
+    skipCountdown(peers);
+
+    const [g1] = JSON.parse(H.ev(peers[0], 'JSON.stringify(currentRoundRecords().map((r) => ({ id: r.id, players: r.players })))'));
+    const leaverId = g1.players[2];
+    const leaver = byId[leaverId];
+    const stayers = peers.filter((p) => p !== leaver);
+
+    // The leaver goes silent without ever sending LEAVE (e.g. app killed by the OS).
+    leaver.listener = null;
+    leaver.closed = true;
+    leaver.window.close();
+    for (const p of stayers) {
+        H.ev(p, `tournamentState.matchGraceUntilTs = null; connectedPlayers[${JSON.stringify(leaverId)}].lastSeen = Date.now() - playerStaleMs - 1000`);
+    }
+    await waitUntil(stayers, `tournamentState.departed.has(${JSON.stringify(leaverId)})`, { timeout: 8000 });
+    for (const p of stayers) {
+        assert.equal(H.ev(p, `games.get(${JSON.stringify(g1.id)}).gameOver`), true, `${p.name}: leaver's match resolved`);
+    }
+
+    // Play out the rest of the first round-robin (3 rounds for 4 peers).
+    for (let round = 0; round < 3; round++) {
+        const open = JSON.parse(H.ev(stayers[0], 'JSON.stringify(currentRoundRecords().filter((r) => !r.gameOver).map((r) => r.players))'));
+        const row = [7, 3, 0][round];
+        for (const players of open) {
+            const p1 = byId[players[1]];
+            const p2 = byId[players[2]];
+            for (let i = 0; i < 4; i++) { H.clickCell(p1, row, i); H.clickCell(p2, row + 1, i); }
+            H.clickCell(p1, row, 4);
+        }
+        if (round < 2) await waitUntil(stayers, `tournamentState.roundIndex === ${round + 1}`);
+    }
+    await waitUntil(stayers, '(tournamentState.cycle || 0) === 1', { timeout: 15000 });
+
+    const roundsByPeer = stayers.map((p) => H.ev(p, 'JSON.stringify(tournamentState.rounds)'));
+    assert.equal(new Set(roundsByPeer).size, 1, 'all stayers agree on the new round-robin');
+    for (const p of stayers) {
+        const rounds = JSON.parse(H.ev(p, 'JSON.stringify(tournamentState.rounds)'));
+        assert.equal(rounds.length, 3, `${p.name}: 3 remaining players → 3 rounds`);
+        assert.ok(!rounds.flat(2).includes(leaverId), `${p.name}: leaver not scheduled in the next round-robin`);
+        assert.ok(!JSON.parse(H.ev(p, 'JSON.stringify(tournamentState.schedule)')).flat().includes(leaverId), `${p.name}: leaver pruned from schedule`);
+        assert.ok(H.ev(p, 'currentRoundRecords().some((r) => !r.gameOver)'), `${p.name}: new round has a live match`);
+    }
+    assertNoErrors(stayers);
+});
